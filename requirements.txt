@@ -1,0 +1,19 @@
+
+# LangChain + Gemini
+langchain
+langchain-core
+langchain-community
+langchain-google-genai
+
+# requirements.txt
+
+fastapi
+uvicorn[standard]
+python-dotenv
+pg8000
+requests
+psycopg2-binary
+sentence-transformers
+llama-parse
+nest-asyncio
+langchain
