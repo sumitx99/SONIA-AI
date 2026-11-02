@@ -1,17 +1,18 @@
 """Image metadata and contextual-vector retrieval using the existing pgvector DB."""
 
 import json
-from functools import lru_cache
 
-from app.db import get_connection
+from app.db import get_pool
+
+_image_schema_ready = False
 
 
-@lru_cache(maxsize=1)
-def ensure_image_schema():
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("""
+async def ensure_image_schema():
+    global _image_schema_ready
+    if _image_schema_ready:
+        return
+    async with (await get_pool()).acquire() as conn:
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS document_images (
                 image_id TEXT PRIMARY KEY,
                 document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
@@ -21,74 +22,68 @@ def ensure_image_schema():
                 metadata JSONB NOT NULL,
                 search_text TEXT NOT NULL,
                 embedding vector NOT NULL
-            )
+            );
+            CREATE INDEX IF NOT EXISTS document_images_location_idx
+                ON document_images(document_id, page_number, image_number);
         """)
-        cursor.execute("""CREATE INDEX IF NOT EXISTS document_images_location_idx
-                          ON document_images(document_id, page_number, image_number)""")
-        conn.commit()
-    finally:
-        conn.close()
+    _image_schema_ready = True
 
 
-def save_document_images(document_id: int, images: list[dict], embeddings: list[list[float]]):
+async def save_document_images(document_id: int, images: list[dict], embeddings: list[list[float]]):
     if len(images) != len(embeddings):
         raise ValueError("Each image must have an embedding")
-    ensure_image_schema()
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        for image, embedding in zip(images, embeddings):
-            metadata = {key: value for key, value in image.items()
-                        if key not in {"data", "object_key", "search_text", "image_id"}}
-            cursor.execute("""
+    await ensure_image_schema()
+    rows = []
+    for image, embedding in zip(images, embeddings):
+        metadata = {key: value for key, value in image.items()
+                    if key not in {"data", "object_key", "search_text", "image_id"}}
+        rows.append((image["image_id"], document_id, image["page_number"], image["image_number"],
+                     image["object_key"], json.dumps(metadata), image["search_text"], embedding))
+    async with (await get_pool()).acquire() as conn:
+        # All images of a document are stored, or none are.
+        async with conn.transaction():
+            await conn.executemany("""
                 INSERT INTO document_images
                     (image_id, document_id, page_number, image_number, object_key,
                      metadata, search_text, embedding)
-                VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s::vector)
-            """, (image["image_id"], document_id, image["page_number"], image["image_number"],
-                  image["object_key"], json.dumps(metadata), image["search_text"], str(embedding)))
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
+            """, rows)
 
 
-def find_document_images(query_embedding=None, document_ids=None, page_number=None,
-                         image_number=None, limit=25, image_id=None) -> list[dict]:
+async def find_document_images(query_embedding=None, document_ids=None, page_number=None,
+                               image_number=None, limit=25, image_id=None) -> list[dict]:
     # An explicitly empty scope must never fall back to all documents.
     if document_ids == []:
         return []
-    ensure_image_schema()
+    await ensure_image_schema()
     filters, values = [], []
+
+    def param(value):
+        values.append(value)
+        return f"${len(values)}"
+
     if document_ids is not None:
-        filters.append("document_id IN (" + ", ".join(["%s"] * len(document_ids)) + ")")
-        values.extend(document_ids)
+        filters.append(f"document_id = ANY({param(list(document_ids))}::int[])")
     for field, value in (("page_number", page_number), ("image_number", image_number),
                          ("image_id", image_id)):
         if value is not None:
-            filters.append(f"{field} = %s")
-            values.append(value)
+            filters.append(f"{field} = {param(value)}")
     where = " WHERE " + " AND ".join(filters) if filters else ""
-    order = "embedding <-> %s::vector" if query_embedding is not None else "document_id, page_number, image_number"
-    if query_embedding is not None:
-        values.append(str(query_embedding))
-    values.append(min(max(limit, 1), 100))
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
+    order = (f"embedding <-> {param(query_embedding)}" if query_embedding is not None
+             else "document_id, page_number, image_number")
+    limit_param = param(min(max(limit, 1), 100))
+    async with (await get_pool()).acquire() as conn:
+        rows = await conn.fetch(
             "SELECT image_id, document_id, object_key, metadata, search_text, documents.source_key "
             f"FROM document_images JOIN documents ON documents.id = document_id{where} "
-            f"ORDER BY {order} LIMIT %s", tuple(values),
+            f"ORDER BY {order} LIMIT {limit_param}", *values,
         )
-        images = []
-        for image_id, document_id, key, metadata, search_text, source_key in cursor.fetchall():
-            if isinstance(metadata, str):
-                metadata = json.loads(metadata)
-            images.append({**metadata, "image_id": image_id, "document_id": document_id,
-                           "object_key": key, "search_text": search_text, "source_key": source_key})
-        return images
-    finally:
-        conn.close()
+    images = []
+    for row in rows:
+        metadata = row["metadata"]
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata)
+        images.append({**metadata, "image_id": row["image_id"], "document_id": row["document_id"],
+                       "object_key": row["object_key"], "search_text": row["search_text"],
+                       "source_key": row["source_key"]})
+    return images

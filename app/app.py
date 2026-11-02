@@ -1,5 +1,6 @@
 # app/app.py
 
+import asyncio
 import logging
 import os
 from fastapi import Depends, FastAPI, UploadFile, File, Form, HTTPException, Query
@@ -10,7 +11,7 @@ from requests.exceptions import HTTPError
 
 # --- MODIFIED IMPORTS ---
 from app.auth import current_user
-from app.db import (insert_file, insert_embeddings, get_document_source,
+from app.db import (insert_file, insert_embeddings, get_document_source, close_pool,
                     set_document_source_key, delete_document, owned_document_ids)
 from app.embeddings import get_embedding, get_embeddings_batch
 from app.llm import get_llm_response
@@ -57,6 +58,11 @@ async def warm_up_docling():
     threading.Thread(target=load, daemon=True).start()
 
 
+@app.on_event("shutdown")
+async def close_database_pool():
+    await close_pool()
+
+
 @app.get("/", tags=["General"])
 async def root():
     return {"message": "Sonia Advanced RAG Chatbot API is running 🚀"}
@@ -73,14 +79,14 @@ async def upload_pdf(file: UploadFile = File(...), chat_id: str | None = Form(No
         # With R2 configured the PDF goes to users/{user}/chats/{chat}/documents/{id}/source.pdf
         # and Postgres keeps only the key; without it the bytes stay in Postgres.
         storage = R2ImageStorage.from_env()
-        file_id = insert_file(file.filename, None if storage else file_bytes, chat_id, user_id)
+        file_id = await insert_file(file.filename, None if storage else file_bytes, chat_id, user_id)
         prefix = document_prefix(user_id, chat_id, file_id)
         if storage:
             try:
-                source_key = storage.upload_pdf(prefix, file_bytes)
-                set_document_source_key(file_id, source_key)
+                source_key = await asyncio.to_thread(storage.upload_pdf, prefix, file_bytes)
+                await set_document_source_key(file_id, source_key)
             except Exception:
-                delete_document(file_id)
+                await delete_document(file_id)
                 raise
         logger.info(f"File '{file.filename}' stored with ID: {file_id}")
 
@@ -98,18 +104,18 @@ async def upload_pdf(file: UploadFile = File(...), chat_id: str | None = Form(No
 
         # --- SPEED UPGRADE: Generate all embeddings in one batch ---
         logger.info(f"Generating embeddings for {len(chunks)} chunks in a single batch.")
-        all_embeddings = get_embeddings_batch(chunks)
+        all_embeddings = await asyncio.to_thread(get_embeddings_batch, chunks)
         
         # --- Store the results ---
         logger.info("Storing chunks and embeddings in the database.")
-        insert_embeddings(file_id, chunks, all_embeddings)
+        await insert_embeddings(file_id, chunks, all_embeddings)
 
         images_stored = 0
         images_status = "disabled"
         warnings = []
         try:
             if storage:
-                images_stored = ingest_document_images(file_id, file_bytes, rich_content, storage, prefix)
+                images_stored = await ingest_document_images(file_id, file_bytes, rich_content, storage, prefix)
                 images_status = "ready"
         except Exception:
             logger.exception("Image processing failed for document %s", file_id)
@@ -136,12 +142,12 @@ async def chat(query: str = Form(...), document_ids: list[int] | None = Form(Non
                user_id: str = Depends(current_user)):
     try:
         logger.info(f"Received query: '{query}'")
-        query_embedding = get_embedding(query)
+        query_embedding = await asyncio.to_thread(get_embedding, query)
         logger.info("Starting advanced retrieval with re-ranking...")
         requested = (document_ids or []) if scope_documents else document_ids
         # Only the signed-in user's documents are ever searched (None = all of theirs).
-        scope = owned_document_ids(user_id, requested)
-        context = get_reranked_context(query, query_embedding, document_ids=scope)
+        scope = await owned_document_ids(user_id, requested)
+        context = await get_reranked_context(query, query_embedding, document_ids=scope)
 
         images = []
         image_status = "not_requested"
@@ -153,9 +159,10 @@ async def chat(query: str = Form(...), document_ids: list[int] | None = Form(Non
                 storage = R2ImageStorage.from_env()
                 if storage:
                     page_number, image_number = requested_image_location(query)
-                    candidates = find_document_images(query_embedding, document_ids=scope,
-                                                       page_number=page_number, image_number=image_number)
-                    selected = rank_contexts(query, candidates, text_key="search_text", limit=5)
+                    candidates = await find_document_images(query_embedding, document_ids=scope,
+                                                             page_number=page_number, image_number=image_number)
+                    selected = await asyncio.to_thread(rank_contexts, query, candidates,
+                                                       text_key="search_text", limit=5)
                     images = image_attachments(selected, storage)
                     image_status = "ready" if images else "not_found"
                     image_notice = None if images else "No indexed image matched the requested document or location."
@@ -184,7 +191,7 @@ async def chat(query: str = Form(...), document_ids: list[int] | None = Form(Non
         else:
             logger.info("Retrieved and re-ranked context successfully.")
 
-        answer = get_llm_response(query, context)
+        answer = await asyncio.to_thread(get_llm_response, query, context)
         logger.info("Generated LLM response.")
         return {"query": query, "answer": answer, "images": images,
                 "image_status": image_status, "image_notice": image_notice}
@@ -199,7 +206,7 @@ async def chat(query: str = Form(...), document_ids: list[int] | None = Form(Non
 
 @app.get("/documents/{document_id}/source", tags=["Document Handling"])
 async def document_source(document_id: int, user_id: str = Depends(current_user)):
-    source = get_document_source(document_id, user_id)
+    source = await get_document_source(document_id, user_id)
     if source is None:
         raise HTTPException(status_code=404, detail="Document not found")
     if source["source_key"]:
@@ -217,24 +224,24 @@ async def document_source(document_id: int, user_id: str = Depends(current_user)
 async def list_images(document_id: int, page_number: int | None = Query(None, ge=1),
                       image_number: int | None = Query(None, ge=1),
                       limit: int = Query(25, ge=1, le=100), user_id: str = Depends(current_user)):
-    if not owned_document_ids(user_id, [document_id]):
+    if not await owned_document_ids(user_id, [document_id]):
         raise HTTPException(status_code=404, detail="Document not found")
     storage = R2ImageStorage.from_env()
     if storage is None:
         raise HTTPException(status_code=503, detail="Image storage is not configured")
-    results = find_document_images(document_ids=[document_id], page_number=page_number,
-                                   image_number=image_number, limit=limit)
+    results = await find_document_images(document_ids=[document_id], page_number=page_number,
+                                         image_number=image_number, limit=limit)
     return {"images": image_attachments(results, storage)}
 
 
 @app.get("/documents/{document_id}/images/{image_id}", tags=["Document Images"])
 async def get_image(document_id: int, image_id: str, user_id: str = Depends(current_user)):
-    if not owned_document_ids(user_id, [document_id]):
+    if not await owned_document_ids(user_id, [document_id]):
         raise HTTPException(status_code=404, detail="Image not found in this document")
     storage = R2ImageStorage.from_env()
     if storage is None:
         raise HTTPException(status_code=503, detail="Image storage is not configured")
-    results = find_document_images(document_ids=[document_id], image_id=image_id, limit=1)
+    results = await find_document_images(document_ids=[document_id], image_id=image_id, limit=1)
     if not results:
         raise HTTPException(status_code=404, detail="Image not found in this document")
     return image_attachments(results, storage)[0]

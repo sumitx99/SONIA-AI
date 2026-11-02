@@ -3,7 +3,7 @@
 fastapi
 uvicorn[standard]
 python-dotenv
-pg8000
+asyncpg
 requests
 pymupdf
 boto3

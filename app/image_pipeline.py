@@ -1,5 +1,6 @@
 """Coordinate image ingestion and return signed, source-linked attachments."""
 
+import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
@@ -10,11 +11,12 @@ from app.image_db import save_document_images
 logger = logging.getLogger(__name__)
 
 
-def ingest_document_images(document_id, pdf_bytes, markdown, storage, prefix):
-    images = extract_document_images(pdf_bytes, markdown)
+async def ingest_document_images(document_id, pdf_bytes, markdown, storage, prefix):
+    # Extraction, embedding and R2 calls are blocking; run them in worker threads.
+    images = await asyncio.to_thread(extract_document_images, pdf_bytes, markdown)
     if not images:
         return 0
-    embeddings = get_embeddings_batch([image["search_text"] for image in images])
+    embeddings = await asyncio.to_thread(get_embeddings_batch, [image["search_text"] for image in images])
     if len(embeddings) != len(images):
         raise ValueError("Image embedding count does not match extracted image count")
     uploaded = []
@@ -24,18 +26,24 @@ def ingest_document_images(document_id, pdf_bytes, markdown, storage, prefix):
         uploaded.append(key)  # list.append is thread-safe
         image["object_key"] = key
 
-    try:
+    def upload_all():
         # Each upload is a network round trip to R2; send them concurrently.
         with ThreadPoolExecutor(max_workers=min(8, len(images))) as pool:
             for result in [pool.submit(upload, image) for image in images]:
                 result.result()
-        save_document_images(document_id, images, embeddings)
-    except Exception:
+
+    def clean_up():
         for key in uploaded:
             try:
                 storage.delete(key)
             except Exception:
                 logger.exception("Could not clean up an image after failed ingestion")
+
+    try:
+        await asyncio.to_thread(upload_all)
+        await save_document_images(document_id, images, embeddings)
+    except Exception:
+        await asyncio.to_thread(clean_up)
         raise
     return len(images)
 

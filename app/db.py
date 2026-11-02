@@ -1,11 +1,8 @@
+import asyncio
 import os
 import ssl
-import threading
-import time
-from collections import deque
-from functools import lru_cache
 
-import pg8000
+import asyncpg
 from dotenv import load_dotenv
 
 # Load the project's .env by path so it works whatever directory the server starts from.
@@ -20,6 +17,8 @@ DB_PORT = int(os.getenv("DB_PORT", "5432"))
 # verify the server certificate. Leave blank for a local Postgres without SSL.
 DB_SSLMODE = os.getenv("DB_SSLMODE", "").strip().lower()
 DB_SSL_ROOT_CERT = os.getenv("DB_SSL_ROOT_CERT", "").strip()
+# Opening a TLS connection to a hosted Postgres costs ~1-3 s, so a small pool is kept open.
+DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "4"))
 
 
 def _ssl_context():
@@ -33,210 +32,131 @@ def _ssl_context():
     return context
 
 
-def _connect():
-    return pg8000.connect(
-        database=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        host=DB_HOST,
-        port=DB_PORT,
-        ssl_context=_ssl_context(),
-    )
+async def _init_connection(conn):
+    # pgvector has no built-in asyncpg codec: exchange vectors as text ("[0.1, 0.2, ...]").
+    schema = await conn.fetchval(
+        "SELECT n.nspname FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace "
+        "WHERE t.typname = 'vector' LIMIT 1")
+    if schema:
+        await conn.set_type_codec("vector", schema=schema, format="text",
+                                  encoder=lambda value: value if isinstance(value, str) else str(list(value)),
+                                  decoder=str)
 
 
-# Opening a TLS connection to a hosted Postgres costs ~1-3 s, so connections are reused.
-# Callers keep the usual pattern: get_connection() ... finally conn.close().
-_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "4"))
-# A connection idle longer than this is pinged first: the pooler may have dropped it.
-_PING_AFTER_SECONDS = 60
-_pool: deque = deque()
-_pool_lock = threading.Lock()
+_pool = None
+_pool_lock = None
 
 
-class _PooledConnection:
-    """Proxy whose close() returns the connection to the pool instead of closing it."""
-
-    def __init__(self, raw):
-        self._raw = raw
-
-    def __getattr__(self, name):
-        return getattr(self._raw, name)
-
-    def close(self):
-        raw, self._raw = self._raw, None
-        if raw is None:
-            return
-        try:
-            raw.rollback()  # discard anything the caller left uncommitted
-        except Exception:
-            _close_quietly(raw)
-            return
-        with _pool_lock:
-            if len(_pool) < _POOL_SIZE:
-                _pool.append((raw, time.monotonic()))
-                return
-        _close_quietly(raw)
+async def get_pool():
+    """The shared asyncpg pool, created on first use. Use `async with (await get_pool()).acquire()`."""
+    global _pool, _pool_lock
+    if _pool is None:
+        _pool_lock = _pool_lock or asyncio.Lock()
+        async with _pool_lock:
+            if _pool is None:
+                _pool = await asyncpg.create_pool(
+                    database=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT,
+                    ssl=_ssl_context(), min_size=1, max_size=DB_POOL_SIZE,
+                    # Recycle idle connections before a hosted pooler drops them.
+                    max_inactive_connection_lifetime=60, init=_init_connection,
+                )
+    return _pool
 
 
-def _close_quietly(raw):
-    try:
-        raw.close()
-    except Exception:
-        pass
+async def close_pool():
+    global _pool
+    if _pool is not None:
+        pool, _pool = _pool, None
+        await pool.close()
 
 
-def get_connection():
-    """Returns a database connection, reusing an idle one when it is still alive."""
-    while True:
-        with _pool_lock:
-            item = _pool.pop() if _pool else None
-        if item is None:
-            return _PooledConnection(_connect())
-        raw, idle_since = item
-        if time.monotonic() - idle_since < _PING_AFTER_SECONDS:
-            return _PooledConnection(raw)
-        try:
-            raw.run("SELECT 1")
-            return _PooledConnection(raw)
-        except Exception:
-            _close_quietly(raw)
+_document_schema_ready = False
 
-@lru_cache(maxsize=1)
-def ensure_document_schema():
+
+async def ensure_document_schema():
     """PDFs stored in R2 keep only their object key here, so `file` may be NULL."""
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS chat_id TEXT")
-        cursor.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_key TEXT")
-        cursor.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS user_id TEXT")
-        cursor.execute("CREATE INDEX IF NOT EXISTS documents_user_idx ON documents(user_id)")
-        cursor.execute("ALTER TABLE documents ALTER COLUMN file DROP NOT NULL")
-        cursor.execute("CREATE INDEX IF NOT EXISTS documents_chat_idx ON documents(chat_id)")
-        conn.commit()
-    finally:
-        conn.close()
+    global _document_schema_ready
+    if _document_schema_ready:
+        return
+    async with (await get_pool()).acquire() as conn:
+        await conn.execute("""
+            ALTER TABLE documents ADD COLUMN IF NOT EXISTS chat_id TEXT;
+            ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_key TEXT;
+            ALTER TABLE documents ADD COLUMN IF NOT EXISTS user_id TEXT;
+            CREATE INDEX IF NOT EXISTS documents_user_idx ON documents(user_id);
+            ALTER TABLE documents ALTER COLUMN file DROP NOT NULL;
+            CREATE INDEX IF NOT EXISTS documents_chat_idx ON documents(chat_id);
+        """)
+    _document_schema_ready = True
 
-def insert_file(filename, file_bytes, chat_id=None, user_id=None):
+
+async def insert_file(filename, file_bytes, chat_id=None, user_id=None):
     """Inserts a file into the documents table and returns its ID.
 
     Pass file_bytes=None when the PDF itself is stored in R2 (see set_document_source_key).
     """
-    ensure_document_schema()
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            "INSERT INTO documents (filename, file, chat_id, user_id) VALUES (%s, %s, %s, %s) RETURNING id",
-            (filename, file_bytes, chat_id, user_id)
-        )
-        file_id = cursor.fetchone()[0]
-        conn.commit()
-    finally:
-        cursor.close()
-        conn.close()
-    return file_id
+    await ensure_document_schema()
+    async with (await get_pool()).acquire() as conn:
+        return await conn.fetchval(
+            "INSERT INTO documents (filename, file, chat_id, user_id) VALUES ($1, $2, $3, $4) RETURNING id",
+            filename, file_bytes, chat_id, user_id)
 
-def set_document_source_key(document_id, source_key):
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("UPDATE documents SET source_key = %s WHERE id = %s", (source_key, document_id))
-        conn.commit()
-    finally:
-        conn.close()
 
-def delete_document(document_id):
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM documents WHERE id = %s", (document_id,))
-        conn.commit()
-    finally:
-        conn.close()
+async def set_document_source_key(document_id, source_key):
+    async with (await get_pool()).acquire() as conn:
+        await conn.execute("UPDATE documents SET source_key = $1 WHERE id = $2", source_key, document_id)
 
-def insert_embeddings(document_id, chunks, embeddings, batch_size=100):
-    """Inserts text chunks and their vectors in a few multi-row INSERTs on one connection."""
+
+async def delete_document(document_id):
+    async with (await get_pool()).acquire() as conn:
+        await conn.execute("DELETE FROM documents WHERE id = $1", document_id)
+
+
+async def insert_embeddings(document_id, chunks, embeddings):
+    """Inserts text chunks and their vectors in one transaction (asyncpg pipelines the rows)."""
     if len(chunks) != len(embeddings):
         raise ValueError("Each chunk must have an embedding")
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        for start in range(0, len(chunks), batch_size):
-            rows = list(zip(chunks[start:start + batch_size], embeddings[start:start + batch_size]))
-            placeholders = ", ".join(["(%s, %s, %s::vector)"] * len(rows))
-            values = [value for chunk, embedding in rows for value in (document_id, chunk, str(embedding))]
-            cursor.execute(
-                f"INSERT INTO document_chunks (document_id, chunk_text, embedding) VALUES {placeholders}",
-                tuple(values),
-            )
-        conn.commit()
-    finally:
-        cursor.close()
-        conn.close()
+    async with (await get_pool()).acquire() as conn:
+        async with conn.transaction():
+            await conn.executemany(
+                "INSERT INTO document_chunks (document_id, chunk_text, embedding) VALUES ($1, $2, $3)",
+                [(document_id, chunk, embedding) for chunk, embedding in zip(chunks, embeddings)])
 
-def search_embeddings(query_embedding, top_k=3, document_ids=None):
+
+async def search_embeddings(query_embedding, top_k=3, document_ids=None):
     """Searches for the most similar embeddings in the database."""
     if document_ids == []:
         return []
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        # Also convert the query embedding to a string for the search
-        query_embedding_str = str(query_embedding)
-
-        where = ""
-        values = []
-        if document_ids is not None:
-            where = " WHERE document_id IN (" + ", ".join(["%s"] * len(document_ids)) + ")"
-            values.extend(document_ids)
-        values.extend([query_embedding_str, top_k])
-        cursor.execute(
-            f"""
-            SELECT chunk_text
-            FROM document_chunks{where}
-            ORDER BY embedding <-> %s::vector
-            LIMIT %s
-            """,
-            tuple(values)
-        )
-        results = cursor.fetchall()
-    finally:
-        cursor.close()
-        conn.close()
-
-    return [{"chunk_text": r[0]} for r in results]
+    where, values = "", [query_embedding, top_k]
+    if document_ids is not None:
+        where = " WHERE document_id = ANY($3::int[])"
+        values.append(list(document_ids))
+    async with (await get_pool()).acquire() as conn:
+        rows = await conn.fetch(
+            f"SELECT chunk_text FROM document_chunks{where} ORDER BY embedding <-> $1 LIMIT $2", *values)
+    return [{"chunk_text": row["chunk_text"]} for row in rows]
 
 
-def owned_document_ids(user_id, document_ids=None):
+async def owned_document_ids(user_id, document_ids=None):
     """The subset of document_ids owned by user_id; all of the user's documents when None."""
     if document_ids == []:
         return []
-    ensure_document_schema()
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        sql, values = "SELECT id FROM documents WHERE user_id = %s", [user_id]
-        if document_ids is not None:
-            sql += " AND id IN (" + ", ".join(["%s"] * len(document_ids)) + ")"
-            values.extend(document_ids)
-        cursor.execute(sql + " ORDER BY id", tuple(values))
-        return [row[0] for row in cursor.fetchall()]
-    finally:
-        conn.close()
+    await ensure_document_schema()
+    sql, values = "SELECT id FROM documents WHERE user_id = $1", [user_id]
+    if document_ids is not None:
+        sql += " AND id = ANY($2::int[])"
+        values.append(list(document_ids))
+    async with (await get_pool()).acquire() as conn:
+        rows = await conn.fetch(sql + " ORDER BY id", *values)
+    return [row["id"] for row in rows]
 
 
-def get_document_source(document_id, user_id):
+async def get_document_source(document_id, user_id):
     """Returns {"file": bytes | None, "source_key": str | None}, or None if missing or not the user's."""
-    ensure_document_schema()
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT file, source_key FROM documents WHERE id = %s AND user_id = %s",
-                       (document_id, user_id))
-        row = cursor.fetchone()
-        if not row:
-            return None
-        return {"file": bytes(row[0]) if row[0] is not None else None, "source_key": row[1]}
-    finally:
-        conn.close()
+    await ensure_document_schema()
+    async with (await get_pool()).acquire() as conn:
+        row = await conn.fetchrow("SELECT file, source_key FROM documents WHERE id = $1 AND user_id = $2",
+                                  document_id, user_id)
+    if not row:
+        return None
+    return {"file": bytes(row["file"]) if row["file"] is not None else None, "source_key": row["source_key"]}

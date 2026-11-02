@@ -1,11 +1,36 @@
+import asyncio
 import os
 import unittest
-from unittest.mock import Mock, patch
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, Mock, patch
 
 from app.image_db import find_document_images, save_document_images
 from app.image_pipeline import image_attachments, ingest_document_images
 from app.image_storage import R2ImageStorage, document_prefix
 from app.db import search_embeddings
+
+
+class FakePool:
+    """Stands in for an asyncpg pool; records whether the transaction ended in an error."""
+
+    def __init__(self):
+        self.conn = AsyncMock()
+        self.conn.fetch.return_value = []
+        self.transaction_error = None
+
+        @asynccontextmanager
+        async def transaction():
+            try:
+                yield
+            except Exception as error:
+                self.transaction_error = error
+                raise
+
+        self.conn.transaction = transaction
+
+    @asynccontextmanager
+    async def acquire(self):
+        yield self.conn
 
 
 class ImagePipelineTests(unittest.TestCase):
@@ -21,7 +46,7 @@ class ImagePipelineTests(unittest.TestCase):
         with patch("app.image_pipeline.extract_document_images", return_value=[image]), \
              patch("app.image_pipeline.get_embeddings_batch", return_value=[[0.1, 0.2]]) as embed, \
              patch("app.image_pipeline.save_document_images") as save:
-            self.assertEqual(ingest_document_images(7, b"pdf", "markdown", storage, "users/u/chats/c/documents/7"), 1)
+            self.assertEqual(asyncio.run(ingest_document_images(7, b"pdf", "markdown", storage, "users/u/chats/c/documents/7")), 1)
             embed.assert_called_once_with([image["search_text"]])
             save.assert_called_once_with(7, [image], [[0.1, 0.2]])
             self.assertEqual(image["object_key"], storage.upload.return_value)
@@ -33,7 +58,7 @@ class ImagePipelineTests(unittest.TestCase):
              patch("app.image_pipeline.get_embeddings_batch", return_value=[[0.1]]), \
              patch("app.image_pipeline.save_document_images", side_effect=RuntimeError("DB failed")):
             with self.assertRaises(RuntimeError):
-                ingest_document_images(7, b"pdf", "", storage, "users/u/chats/c/documents/7")
+                asyncio.run(ingest_document_images(7, b"pdf", "", storage, "users/u/chats/c/documents/7"))
         storage.delete.assert_called_once_with("uploaded-key")
 
     def test_embedding_mismatch_does_not_upload_anything(self):
@@ -41,40 +66,38 @@ class ImagePipelineTests(unittest.TestCase):
         with patch("app.image_pipeline.extract_document_images", return_value=[self.image()]), \
              patch("app.image_pipeline.get_embeddings_batch", return_value=[]):
             with self.assertRaises(ValueError):
-                ingest_document_images(7, b"pdf", "", storage, "users/u/chats/c/documents/7")
+                asyncio.run(ingest_document_images(7, b"pdf", "", storage, "users/u/chats/c/documents/7"))
         storage.upload.assert_not_called()
 
     def test_empty_document_scope_cannot_search_other_documents(self):
-        with patch("app.image_db.get_connection") as connection, \
-             patch("app.db.get_connection") as text_connection:
-            self.assertEqual(find_document_images([0.1], document_ids=[]), [])
-            self.assertEqual(search_embeddings([0.1], document_ids=[]), [])
-        connection.assert_not_called()
-        text_connection.assert_not_called()
+        with patch("app.image_db.get_pool") as image_pool, patch("app.db.get_pool") as text_pool:
+            self.assertEqual(asyncio.run(find_document_images([0.1], document_ids=[])), [])
+            self.assertEqual(asyncio.run(search_embeddings([0.1], document_ids=[])), [])
+        image_pool.assert_not_called()
+        text_pool.assert_not_called()
 
     def test_explicit_location_and_document_scope_are_sql_filters(self):
-        connection = Mock()
-        cursor = connection.cursor.return_value
-        cursor.fetchall.return_value = []
+        pool = FakePool()
         with patch("app.image_db.ensure_image_schema"), \
-             patch("app.image_db.get_connection", return_value=connection):
-            find_document_images([0.1], document_ids=[7, 8], page_number=12, image_number=2)
-        sql, values = cursor.execute.call_args.args
-        self.assertIn("document_id IN (%s, %s)", sql)
-        self.assertIn("page_number = %s", sql)
-        self.assertIn("image_number = %s", sql)
-        self.assertEqual(values, (7, 8, 12, 2, "[0.1]", 25))
+             patch("app.image_db.get_pool", AsyncMock(return_value=pool)):
+            asyncio.run(find_document_images([0.1], document_ids=[7, 8], page_number=12, image_number=2))
+        sql, *values = pool.conn.fetch.call_args.args
+        self.assertIn("document_id = ANY($1::int[])", sql)
+        self.assertIn("page_number = $2", sql)
+        self.assertIn("image_number = $3", sql)
+        self.assertEqual(values, [[7, 8], 12, 2, [0.1], 25])
 
     def test_database_failure_rolls_back_the_entire_image_batch(self):
-        connection = Mock()
-        connection.cursor.return_value.execute.side_effect = RuntimeError("insert failed")
+        pool = FakePool()
+        pool.conn.executemany.side_effect = RuntimeError("insert failed")
         image = {**self.image(), "object_key": "key"}
         with patch("app.image_db.ensure_image_schema"), \
-             patch("app.image_db.get_connection", return_value=connection):
+             patch("app.image_db.get_pool", AsyncMock(return_value=pool)):
             with self.assertRaises(RuntimeError):
-                save_document_images(7, [image], [[0.1]])
-        connection.rollback.assert_called_once()
-        connection.commit.assert_not_called()
+                asyncio.run(save_document_images(7, [image], [[0.1]]))
+        # The batch ran inside one transaction, which saw the error and rolled back.
+        self.assertIsInstance(pool.transaction_error, RuntimeError)
+        self.assertEqual(len(pool.conn.executemany.call_args.args[1]), 1)
 
     def test_response_signs_urls_without_leaking_storage_keys_or_bytes(self):
         storage = Mock(expires_in=900)
@@ -126,7 +149,7 @@ class ImagePipelineTests(unittest.TestCase):
         with patch("app.image_pipeline.extract_document_images", return_value=[self.image()]), \
              patch("app.image_pipeline.get_embeddings_batch", return_value=[[0.1]]), \
              patch("app.image_pipeline.save_document_images"):
-            ingest_document_images(7, b"pdf", "markdown", storage, "users/u/chats/chat-1/documents/7")
+            asyncio.run(ingest_document_images(7, b"pdf", "markdown", storage, "users/u/chats/chat-1/documents/7"))
         self.assertEqual(storage.upload.call_args.args[0], "users/u/chats/chat-1/documents/7")
 
 
