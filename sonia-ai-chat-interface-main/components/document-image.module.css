@@ -115,27 +115,18 @@
   overflow-wrap: anywhere;
 }
 .caption strong { font-size: 13px; }
-.heading, .context small {
+.heading {
   color: var(--muted-foreground);
   font-size: 12px;
 }
 .caption a { font-size: 13px; }
-.compact .caption { padding: 10px 12px; }
-
-.context {
-  padding: 12px 16px;
-  border-top: 1px solid var(--border);
+.captionText {
+  margin: 0;
   font-size: 13px;
-}
-.compact .context { padding: 10px 12px; }
-.context summary { cursor: pointer; }
-.context > div { margin-top: 16px; }
-.context p {
-  margin: 6px 0 12px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
   line-height: 1.6;
+  color: var(--foreground);
 }
+.compact .caption { padding: 10px 12px; }
 
 /* Lightbox */
 .overlay {

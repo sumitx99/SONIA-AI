@@ -110,7 +110,9 @@ function ImageCard({ item, index, compact, onOpen, onRefresh }: {
       </div>
       <figcaption className={styles.caption}>
         <strong>{label}</strong>
-        {attachment.heading_path.length > 0 && (
+        {attachment.caption ? (
+          <p className={styles.captionText}>{attachment.caption}</p>
+        ) : attachment.heading_path.length > 0 && (
           <span className={styles.heading}>{attachment.heading_path.join(" › ")}</span>
         )}
         {attachment.source_url && (
@@ -119,22 +121,6 @@ function ImageCard({ item, index, compact, onOpen, onRefresh }: {
           </a>
         )}
       </figcaption>
-      <details className={styles.context}>
-        <summary>Text around this image</summary>
-        {(["before", "after"] as const).map((side) => (
-          <div key={side}>
-            <strong>{side === "before" ? "Before the image" : "After the image"}</strong>
-            {attachment[`${side}_context`].length ? attachment[`${side}_context`].map((block, i) => (
-              <div key={`${block.page_number}-${block.block_number}-${i}`}>
-                <small>Page {block.page_number}</small>
-                <p>{block.text}</p>
-              </div>
-            )) : <p>No surrounding text was extracted on this side.</p>}
-          </div>
-        ))}
-        <small>Image position (PDF points): {attachment.bbox.map((value) => value.toFixed(1)).join(", ")}.
-          Surrounding text follows the detected reading order.</small>
-      </details>
     </figure>
   );
 }
@@ -181,8 +167,8 @@ function Lightbox({ items, index, onIndex, onClose, onRefresh, ensureFresh }: {
               <header className={styles.toolbar}>
                 <div className={styles.title}>
                   <Dialog.Title>{labelOf(current.attachment)}</Dialog.Title>
-                  {current.attachment.heading_path.length > 0 && (
-                    <span>{current.attachment.heading_path.join(" › ")}</span>
+                  {(current.attachment.caption || current.attachment.heading_path.length > 0) && (
+                    <span>{current.attachment.caption ?? current.attachment.heading_path.join(" › ")}</span>
                   )}
                 </div>
                 {count > 1 && <span className={styles.counter}>{index! + 1} / {count}</span>}

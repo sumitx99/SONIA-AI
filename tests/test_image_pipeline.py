@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, Mock, patch
 
 from app.image_db import find_document_images, save_document_images
-from app.image_pipeline import image_attachments, ingest_document_images
+from app.image_pipeline import image_attachments, image_caption, ingest_document_images
 from app.image_storage import R2ImageStorage, document_prefix
 from app.db import search_embeddings
 
@@ -108,6 +108,30 @@ class ImagePipelineTests(unittest.TestCase):
         self.assertNotIn("data", result)
         self.assertNotIn("object_key", result)
         self.assertNotIn("search_text", result)
+
+    def context(self, *texts):
+        return [{"text": text, "page_number": 4, "block_number": i, "bbox": []} for i, text in enumerate(texts)]
+
+    def test_response_shows_only_the_caption_not_surrounding_text(self):
+        storage = Mock(expires_in=900)
+        image = {**self.image(), "document_id": 7, "object_key": "k", "bbox": [1, 2, 3, 4],
+                 "before_context": self.context("Scaled Dot-Product Attention", "Multi-Head Attention"),
+                 "after_context": self.context(
+                     "Figure 2: (left) Scaled Dot-Product Attention.\n(right) Multi-Head Attention.",
+                     "query with all keys, divide each by √dk")}
+        result = image_attachments([image], storage)[0]
+        self.assertEqual(result["caption"],
+                         "Figure 2: (left) Scaled Dot-Product Attention. (right) Multi-Head Attention.")
+        for private in ("before_context", "after_context", "text_before", "text_after", "bbox"):
+            self.assertNotIn(private, result)
+
+    def test_caption_above_the_image_and_missing_caption(self):
+        table = {"before_context": self.context("Intro text", "Table 1: Maximum path lengths."),
+                 "after_context": self.context("Layer type  Complexity")}
+        self.assertEqual(image_caption(table), "Table 1: Maximum path lengths.")
+        plain = {"before_context": self.context("Figures show the results"),
+                 "after_context": self.context("The encoder maps an input sequence.")}
+        self.assertIsNone(image_caption(plain))
 
     def test_r2_disabled_and_partial_configuration(self):
         with patch.dict(os.environ, {}, clear=True):

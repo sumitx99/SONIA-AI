@@ -24,22 +24,14 @@ async function apiFetch(path: string, init: RequestInit = {}) {
 }
 
 
-export interface ImageContext {
-  text: string;
-  page_number: number;
-  block_number: number;
-  bbox: number[];
-}
-
 export interface ImageAttachment {
   image_id: string;
   document_id: number;
   image_number: number;
   page_number: number;
-  bbox: number[];
   heading_path: string[];
-  before_context: ImageContext[];
-  after_context: ImageContext[];
+  /** The figure's own caption from the PDF (e.g. "Figure 2: …"), when it has one. */
+  caption: string | null;
   url: string;
   /** Presigned link to the source PDF at this image's page; null when the PDF isn't in R2. */
   source_url?: string | null;
