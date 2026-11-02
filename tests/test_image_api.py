@@ -13,6 +13,7 @@ from test_document_images import sample_pdf
 # Avoid loading Docling models or making network calls during API tests.
 parser = types.ModuleType("app.docling_utils")
 parser.process_pdf_with_docling = Mock()
+parser.docling_enabled = Mock(return_value=False)
 original_parser = sys.modules.get("app.docling_utils")
 sys.modules["app.docling_utils"] = parser
 try:

@@ -1,6 +1,7 @@
 """Coordinate image ingestion and return signed, source-linked attachments."""
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 from app.document_images import extract_document_images
 from app.embeddings import get_embeddings_batch
@@ -17,11 +18,17 @@ def ingest_document_images(document_id, pdf_bytes, markdown, storage, prefix):
     if len(embeddings) != len(images):
         raise ValueError("Image embedding count does not match extracted image count")
     uploaded = []
+
+    def upload(image):
+        key = storage.upload(prefix, image)
+        uploaded.append(key)  # list.append is thread-safe
+        image["object_key"] = key
+
     try:
-        for image in images:
-            key = storage.upload(prefix, image)
-            uploaded.append(key)
-            image["object_key"] = key
+        # Each upload is a network round trip to R2; send them concurrently.
+        with ThreadPoolExecutor(max_workers=min(8, len(images))) as pool:
+            for result in [pool.submit(upload, image) for image in images]:
+                result.result()
         save_document_images(document_id, images, embeddings)
     except Exception:
         for key in uploaded:

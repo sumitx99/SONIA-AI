@@ -65,8 +65,9 @@ def get_embeddings_batch(texts: List[str]) -> List[List[float]]:
         batch_embeddings = [_normalize(entry["values"]) for entry in response.json()["embeddings"]]
         all_embeddings.extend(batch_embeddings)
         
-        # Optional: Add a small delay between batches to be a good API citizen
-        time.sleep(0.5)
+        # A short pause between batches (not after the last) to stay under rate limits.
+        if i + GOOGLE_EMBEDDING_BATCH_SIZE < len(texts):
+            time.sleep(0.5)
 
     logger.info(f"Successfully generated embeddings for all {len(all_embeddings)} chunks.")
     return all_embeddings

@@ -15,7 +15,7 @@ from app.db import (insert_file, insert_embeddings, get_document_source,
 from app.embeddings import get_embedding, get_embeddings_batch
 from app.llm import get_llm_response
 from app.pdf_utils import chunk_text
-from app.docling_utils import process_pdf_with_docling
+from app.docling_utils import docling_enabled, process_pdf_with_docling
 from app.retriever import get_reranked_context, rank_contexts
 from app.document_images import wants_images, requested_image_location
 from app.image_storage import R2ImageStorage, document_prefix, valid_chat_id
@@ -42,7 +42,7 @@ app.add_middleware(
 async def warm_up_docling():
     # Load Docling's layout models in the background so the first upload isn't slow.
     import threading
-    from app.docling_utils import _converter, docling_enabled
+    from app.docling_utils import _converter
 
     if not docling_enabled():
         return
@@ -84,8 +84,8 @@ async def upload_pdf(file: UploadFile = File(...), chat_id: str | None = Form(No
                 raise
         logger.info(f"File '{file.filename}' stored with ID: {file_id}")
 
-        # Layout-aware Markdown via Docling, run off the event loop: conversion takes seconds.
-        logger.info("Processing document with Docling...")
+        # Layout-aware Markdown via Docling (or PyMuPDF text), off the event loop: it takes seconds.
+        logger.info("Extracting text with %s...", "Docling" if docling_enabled() else "PyMuPDF")
         rich_content = await run_in_threadpool(process_pdf_with_docling, file_bytes, file.filename)
         
         if not rich_content:
@@ -94,7 +94,7 @@ async def upload_pdf(file: UploadFile = File(...), chat_id: str | None = Form(No
         
         # --- Chunk the high-quality Markdown content ---
         chunks = chunk_text(rich_content)
-        logger.info(f"Extracted {len(chunks)} chunks from the Docling output.")
+        logger.info(f"Extracted {len(chunks)} chunks.")
 
         # --- SPEED UPGRADE: Generate all embeddings in one batch ---
         logger.info(f"Generating embeddings for {len(chunks)} chunks in a single batch.")
@@ -102,8 +102,7 @@ async def upload_pdf(file: UploadFile = File(...), chat_id: str | None = Form(No
         
         # --- Store the results ---
         logger.info("Storing chunks and embeddings in the database.")
-        for i, chunk in enumerate(chunks):
-            insert_embeddings(file_id, chunk, all_embeddings[i])
+        insert_embeddings(file_id, chunks, all_embeddings)
 
         images_stored = 0
         images_status = "disabled"
