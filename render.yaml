@@ -1,0 +1,50 @@
+# Render Blueprint for the Sonia API (free plan). Secrets are `sync: false`:
+# Render asks for their values when the Blueprint is created; they never live in git.
+services:
+  - type: web
+    name: sonia-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.8"
+      # The free plan has 512 MB: parse PDFs with PyMuPDF and skip torch-based re-ranking.
+      - key: PDF_PARSER
+        value: pymupdf
+      - key: RERANKER
+        value: "off"
+      - key: FRONTEND_ORIGINS
+        sync: false
+      - key: DB_NAME
+        value: postgres
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        value: "5432"
+      - key: DB_SSLMODE
+        value: require
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: GEMINI_CHAT_MODEL
+        value: gemini-3.5-flash
+      - key: GEMINI_EMBEDDING_MODEL
+        value: gemini-embedding-001
+      - key: SUPABASE_URL
+        sync: false
+      - key: R2_ENDPOINT_URL
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        sync: false
+      - key: R2_IMAGE_URL_TTL
+        value: "900"

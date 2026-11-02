@@ -13,7 +13,7 @@ This isn't just a demo — it's a production-grade application with a modern tec
 ## ✨ Core Features
 
 - **📄 High-Quality Document Parsing:**  
-  Uses [LlamaParse](https://cloud.llamaindex.ai) for layout-aware parsing. Titles, paragraphs, and even tables are extracted with structure, turning PDFs into clean, AI-readable chunks.
+  Uses [Docling](https://github.com/docling-project/docling) locally for layout-aware parsing — no API key. Titles, paragraphs, and even tables are extracted with structure, turning PDFs into clean, AI-readable chunks. If Docling fails, plain text is extracted with PyMuPDF so uploads still work.
 
 - **⚡ High-Speed Ingestion:**  
   Batch embedding API calls make ingestion blazingly fast, even for large multi-page PDFs.
@@ -36,10 +36,10 @@ This isn't just a demo — it's a production-grade application with a modern tec
 ### Backend:
 - **Framework:** FastAPI
 - **Database:** PostgreSQL + pgvector
-- **Parsing:** LlamaParse
-- **Embeddings:** Google Gemini `text-embedding-004`
+- **Parsing:** Docling (local), PyMuPDF fallback
+- **Embeddings:** Google Gemini `gemini-embedding-001` (768 dimensions)
 - **Re-ranking:** `sentence-transformers` Cross-Encoder
-- **Generation:** Google Gemini `gemini-1.5-flash`
+- **Generation:** Google Gemini `gemini-3.5-flash` (set `GEMINI_CHAT_MODEL` to change)
 - **Other:** LangChain (chunking), Uvicorn, Pydantic
 
 ### Frontend:
@@ -60,7 +60,7 @@ This system is designed to handle document ingestion and question answering usin
 ```
 PDF Upload 
    ↓
-LlamaParse 
+Docling 
    ↓
 Smart Chunking 
    ↓
@@ -71,8 +71,8 @@ Store in pgvector
 
 ### Steps:
 1. **PDF Upload**: User uploads a PDF document.
-2. **LlamaParse**: Parses the PDF into structured text.
-3. **Smart Chunking**: Breaks down the text into semantically meaningful chunks.
+2. **Docling**: Converts the PDF into structured Markdown on the server (set `DOCLING_OCR=true` for scanned PDFs).
+3. **Smart Chunking**: Splits Markdown by headings and subsections (ATX `#`–`######` and underlined headings), then recursively splits large section bodies into chunks of up to 1,000 characters with a target overlap of 100 characters. Every chunk includes its heading path, such as `Section: Handbook > Leave Policy > Annual Leave`, in the embedded and stored text. Overlap stays within the same section; documents without headings use recursive splitting. The heading prefix is additional to the body size limit. Fenced code blocks do not create sections.
 4. **Batch Embedding**: Converts chunks into vector embeddings.
 5. **Store in pgvector**: Saves the embeddings into a `pgvector` PostgreSQL database for efficient retrieval.
 
@@ -109,7 +109,7 @@ Get Answer
 
 ## 🧠 Tech Stack
 
-- **LlamaParse**: PDF parsing and text extraction
+- **Docling**: PDF parsing and text extraction
 - **Vector DB**: `pgvector` extension for PostgreSQL
 - **Embeddings**: Vector representations for semantic search
 - **Cross-Encoder**: Improves retrieval precision via re-ranking
@@ -121,6 +121,49 @@ Get Answer
 
 - Optimized for semantic search and high-accuracy Q&A.
 - Modular design allows replacing components (e.g., LLM or embedding model).
+- Chunking changes apply to new uploads. Existing documents must be reprocessed and their old chunks replaced to use section-aware retrieval; uploading again alone does not remove old chunks.
+
+## Document images and source context
+
+PDF uploads can also extract displayed raster-image occurrences and upload their visible crops to a private Cloudflare R2 bucket. Each occurrence has a unique ID, document ID, page number, per-page image number, bounding box in unrotated PDF points, page size/rotation, and a best-effort Markdown heading path. Repeated images keep separate locations. The two preceding and two following extracted text blocks are saved with their own page numbers, bounding boxes and block numbers, including neighbors on adjacent pages.
+
+Image retrieval embeds the heading and surrounding text; it does not analyze image pixels. Scans without a text layer may have empty before/after text. Geometric reading order is approximate for complex multi-column layouts. Pure vector drawings are not detected as independent images by this implementation.
+
+### Configuration
+
+Install the updated `requirements.txt`, copy `.env.example` to `.env`, and configure the existing database and model services. To enable images, set all of:
+
+```dotenv
+R2_ENDPOINT_URL=https://<account-id>.r2.cloudflarestorage.com
+R2_ACCESS_KEY_ID=<access-key-id>
+R2_SECRET_ACCESS_KEY=<secret-access-key>
+R2_BUCKET_NAME=<private-bucket>
+R2_IMAGE_URL_TTL=900
+```
+
+The R2 credential needs object read/write/delete access to that bucket (delete supports cleanup after a failed ingestion). Leave all four connection settings blank to keep text-only uploads. Partial configuration is reported as an image-processing failure while the uploaded text remains usable. The `document_images` table and location index are created on first image ingestion or retrieval, using the existing pgvector installation; the DB user needs permission to create them. Original PDF bytes remain in the existing `documents` table. R2 object keys are stored in the DB; fresh temporary GET URLs are generated for responses.
+
+Only new uploads extract images automatically. Documents uploaded before enabling images need reprocessing; a fresh upload creates a separate document rather than replacing the original. The frontend displays image-processing failures and offers a reload button for expired image links. Set frontend `NEXT_PUBLIC_API_URL` if the API is not at `http://localhost:8000`.
+
+### Retrieval API
+
+- `POST /chat`: Existing `query` form field plus optional repeated `document_ids` fields, `scope_documents=true` (an empty document list searches nothing), and `include_images=true`. Image-related queries also request images automatically, including “page 12 ki second image dikhao”. Explicit page/image numbers constrain retrieval; image numbering means occurrence order on each page, not printed figure labels. Up to five image matches are returned with fresh URLs and source metadata.
+- `GET /documents/{document_id}/images?page_number=12&image_number=2`: List extracted images, with optional location filters and `limit` (1–100).
+- `GET /documents/{document_id}/images/{image_id}`: Fetch a specific image's metadata and renew its URL.
+- `GET /documents/{document_id}/source`: Open the original PDF; the frontend adds `#page=N` to jump to the source page.
+
+The chat UI sends the active conversation's uploaded document IDs for both text and image retrieval, renders image cards, and exposes before/after text and a source-page link. Document scope is not authorization: the existing API has no authentication layer. Protect these routes with document ownership checks before exposing private documents to multiple users.
+
+### Verification
+
+```bash
+python -m unittest discover -s tests -v
+cd sonia-ai-chat-interface-main
+npm run typecheck
+npm run build
+```
+
+Backend tests use generated PDFs and mock the model, parser service, database and R2 calls. They cover image locations/rotation, surrounding text, repeated occurrences, scoped retrieval, signed URL generation, API responses and cleanup after failed ingestion. They require `httpx` in addition to the runtime requirements for FastAPI's test client. Live R2, model and PostgreSQL connectivity must be checked separately with the configured services.
 
 ### ✅ Prerequisites
 - Python 3.10+

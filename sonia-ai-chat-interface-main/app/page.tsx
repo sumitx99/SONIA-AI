@@ -1,302 +1,258 @@
-import Link from "next/link"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { FileText, MessageSquare, Sparkles, Zap, Shield, Clock, ArrowRight, Star } from "lucide-react"
+import Link from "next/link";
+import {
+  ArrowUpRight,
+  ArrowDown,
+  Plus,
+  FileText,
+  CornerDownRight,
+} from "lucide-react";
+import { Brand, Emblem } from "@/components/brand";
+import { Reveal } from "@/components/reveal";
+import { ConversationPreview } from "@/components/conversation-preview";
+import { LandingMotion, MotionToggle } from "@/components/landing-motion";
+import {
+  SculptureStage,
+  StudioHeadline,
+  ReadingManifesto,
+} from "@/components/studio-motion";
+import { GlassMethodCards } from "@/components/glass-method-cards";
+import { HeroCursor } from "@/components/hero-cursor";
+import "./landing.css";
 
 export default function LandingPage() {
   return (
-    <div className="min-h-screen bg-background">
-      {/* Navigation */}
-      <nav className="border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="container mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center gap-2">
-              <Sparkles className="h-8 w-8 text-primary" />
-              <span className="text-xl font-bold text-foreground">Sonia AI</span>
-            </div>
-            <div className="flex items-center gap-4">
-              <Link href="/auth">
-                <Button variant="ghost">Sign In</Button>
+    <LandingMotion className="studio-site">
+      <a href="#main" className="skip-link">
+        Skip to content
+      </a>
+      <main id="main">
+        <div className="studio-dark">
+          <header className="studio-header studio-wrap">
+            <Brand light />
+            <nav aria-label="Main navigation">
+              <a href="#approach">The philosophy</a>
+              <a href="#workspace">The experience</a>
+              <a href="#about">The maker</a>
+            </nav>
+            <div className="studio-header-actions">
+              <MotionToggle />
+              <Link href="/chat" className="studio-header-cta">
+                Enter Sonia <ArrowUpRight size={16} />
               </Link>
-              <Link href="/chat">
-                <Button>Try Chat</Button>
-              </Link>
             </div>
-          </div>
-        </div>
-      </nav>
-
-      {/* Hero Section */}
-      <section className="py-20 px-4 sm:px-6 lg:px-8">
-        <div className="container mx-auto text-center">
-          <Badge variant="secondary" className="mb-4">
-            AI-Powered Document Assistant
-          </Badge>
-          <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold text-foreground mb-6 text-balance">
-            Your Clari Document Assistant
-          </h1>
-          <p className="text-xl text-muted-foreground mb-8 max-w-2xl mx-auto text-pretty">
-            Upload PDFs, ask questions, and get intelligent answers. Sonia makes document analysis effortless and
-            engaging.
-          </p>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <Link href="/chat">
-              <Button size="lg" className="text-lg px-8">
-                Try Sonia Now
-                <ArrowRight className="ml-2 h-5 w-5" />
-              </Button>
-            </Link>
-            <Button variant="outline" size="lg" className="text-lg px-8 bg-transparent">
-              Watch Demo
-            </Button>
-          </div>
-        </div>
-      </section>
-
-      {/* Features Section */}
-      <section className="py-20 px-4 sm:px-6 lg:px-8 bg-muted/50">
-        <div className="container mx-auto">
-          <div className="text-center mb-16">
-            <h2 className="text-3xl sm:text-4xl font-bold text-foreground mb-4">
-              Powerful Features for Document Analysis
-            </h2>
-            <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-              Everything you need to understand, analyze, and interact with your documents.
-            </p>
-          </div>
-
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-            <Card className="border-border">
-              <CardHeader>
-                <FileText className="h-12 w-12 text-primary mb-4" />
-                <CardTitle>PDF Analysis</CardTitle>
-                <CardDescription>
-                  Upload any PDF and get instant insights. Extract key information, summaries, and answers to your
-                  questions.
-                </CardDescription>
-              </CardHeader>
-            </Card>
-
-            <Card className="border-border">
-              <CardHeader>
-                <MessageSquare className="h-12 w-12 text-primary mb-4" />
-                <CardTitle>Interactive Chat</CardTitle>
-                <CardDescription>
-                  Have natural conversations about your documents. Ask follow-up questions and dive deeper into the
-                  content.
-                </CardDescription>
-              </CardHeader>
-            </Card>
-
-            <Card className="border-border">
-              <CardHeader>
-                <Zap className="h-12 w-12 text-primary mb-4" />
-                <CardTitle>Lightning Fast</CardTitle>
-                <CardDescription>
-                  Get answers in seconds, not minutes. Our AI processes documents quickly while maintaining accuracy.
-                </CardDescription>
-              </CardHeader>
-            </Card>
-
-            <Card className="border-border">
-              <CardHeader>
-                <Shield className="h-12 w-12 text-primary mb-4" />
-                <CardTitle>Secure & Private</CardTitle>
-                <CardDescription>
-                  Your documents are processed securely and never stored permanently. Privacy is our top priority.
-                </CardDescription>
-              </CardHeader>
-            </Card>
-
-            <Card className="border-border">
-              <CardHeader>
-                <Clock className="h-12 w-12 text-primary mb-4" />
-                <CardTitle>Chat History</CardTitle>
-                <CardDescription>
-                  Keep track of all your conversations and easily return to previous document analyses.
-                </CardDescription>
-              </CardHeader>
-            </Card>
-
-            <Card className="border-border">
-              <CardHeader>
-                <Sparkles className="h-12 w-12 text-primary mb-4" />
-                <CardTitle>Smart Insights</CardTitle>
-                <CardDescription>
-                  Get intelligent summaries, key points, and contextual understanding of complex documents.
-                </CardDescription>
-              </CardHeader>
-            </Card>
-          </div>
-        </div>
-      </section>
-
-      {/* Testimonials Section */}
-      <section className="py-20 px-4 sm:px-6 lg:px-8">
-        <div className="container mx-auto">
-          <div className="text-center mb-16">
-            <h2 className="text-3xl sm:text-4xl font-bold text-foreground mb-4">Loved by Users Worldwide</h2>
-            <p className="text-xl text-muted-foreground">See what people are saying about Sonia AI</p>
-          </div>
-
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-            <Card className="border-border">
-              <CardContent className="pt-6">
-                <div className="flex mb-4">
-                  {[...Array(5)].map((_, i) => (
-                    <Star key={i} className="h-5 w-5 fill-primary text-primary" />
-                  ))}
-                </div>
-                <p className="text-card-foreground mb-4">
-                  "Sonia has revolutionized how I handle research papers. The AI understands context incredibly well!"
+          </header>
+          <section className="studio-hero studio-wrap">
+            {/* Only "Old soul." opens the selection box. */}
+            <HeroCursor target=".studio-headline-line:first-child" />
+            <div className="studio-hero-top">
+              <span>
+                <i /> INTELLIGENCE WITH A DIFFERENT SOUL
+              </span>
+              <span>FOR THE CURIOUS / VOL. 01</span>
+            </div>
+            <SculptureStage />
+            <div className="studio-hero-copy">
+              <StudioHeadline />
+              <Reveal delay={0.25}>
+                <p>
+                  Your documents have a story.
+                  <br />
+                  Find the part that matters.
                 </p>
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-primary rounded-full flex items-center justify-center text-primary-foreground font-semibold">
-                    S
-                  </div>
-                  <div>
-                    <p className="font-semibold text-card-foreground">Shubham Raj</p>
-                    <p className="text-sm text-muted-foreground">Software Engineer</p>
-                  </div>
+                <div className="studio-hero-actions">
+                  <Link
+                    href="/chat"
+                    className="studio-button studio-button-red"
+                  >
+                    Meet your new mind <ArrowUpRight size={20} />
+                  </Link>
+                  <a href="#workspace" className="studio-inline-link">
+                    See it in thought <span>↗</span>
+                  </a>
                 </div>
-              </CardContent>
-            </Card>
-
-            <Card className="border-border">
-              <CardContent className="pt-6">
-                <div className="flex mb-4">
-                  {[...Array(5)].map((_, i) => (
-                    <Star key={i} className="h-5 w-5 fill-primary text-primary" />
-                  ))}
-                </div>
-                <p className="text-card-foreground mb-4">
-                  "The chat interface is so intuitive. It feels like having a conversation with a knowledgeable
-                  colleague."
-                </p>
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-primary rounded-full flex items-center justify-center text-primary-foreground font-semibold">
-                    M
-                  </div>
-                  <div>
-                    <p className="font-semibold text-card-foreground">Akshit Sharma </p>
-                    <p className="text-sm text-muted-foreground">Machine learning enginner</p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="border-border">
-              <CardContent className="pt-6">
-                <div className="flex mb-4">
-                  {[...Array(5)].map((_, i) => (
-                    <Star key={i} className="h-5 w-5 fill-primary text-primary" />
-                  ))}
-                </div>
-                <p className="text-card-foreground mb-4">
-                  "I save hours every week using Sonia to analyze contracts and reports. It's incredibly accurate."
-                </p>
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-primary rounded-full flex items-center justify-center text-primary-foreground font-semibold">
-                    A
-                  </div>
-                  <div>
-                    <p className="font-semibold text-card-foreground">Madhav Arya</p>
-                    <p className="text-sm text-muted-foreground">Business Consultant</p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+              </Reveal>
+            </div>
+            <div className="studio-hero-bottom">
+              <span className="studio-micro">
+                YOUR DOCUMENTS. YOUR QUESTIONS. YOUR NEXT DISCOVERY.
+              </span>
+              <a href="#approach">
+                SCROLL TO EXPLORE <ArrowDown size={14} />
+              </a>
+            </div>
+          </section>
+        </div>
+        <div
+          className="studio-ribbon"
+          aria-label="Read deeply, think freely, ask anything"
+        >
+          <div>
+            {[0, 1].map((copy) => (
+              <div key={copy} aria-hidden={copy === 1 ? true : undefined}>
+                <span>READ DEEPLY</span>
+                <Emblem />
+                <span>THINK FREELY</span>
+                <Emblem />
+                <span>ASK ANYTHING</span>
+                <Emblem />
+                <span>FIND YOUR THREAD</span>
+                <Emblem />
+              </div>
+            ))}
           </div>
         </div>
-      </section>
-      {/* Meet the Creator Section */}
-      <section className="py-20 px-4 sm:px-6 lg:px-8 bg-muted/50">
-        <div className="container mx-auto">
-          <div className="text-center mb-16">
-            <h2 className="text-3xl sm:text-4xl font-bold text-foreground mb-4">Meet the Creator</h2>
-            <p className="text-xl text-muted-foreground">Built with passion by a dedicated software engineer</p>
-          </div>
-
-          <div className="max-w-4xl mx-auto">
-            <Card className="border-border">
-              <CardContent className="p-8">
-                <div className="flex flex-col lg:flex-row items-center gap-8">
-                  <div className="flex-shrink-0">
-                    <img
-                      src="https://i.ibb.co/3mYFS506/Whats-App-Image-2025-08-18-at-21-44-25-b0ef52e2.jpg"
-                      alt="Sumit Kumar Ranjan"
-                      className="w-48 h-48 rounded-full object-cover border-4 border-primary/20"
-                    />
-                  </div>
-                  <div className="flex-1 text-center lg:text-left">
-                    <h3 className="text-2xl font-bold text-foreground mb-2">Sumit Kumar Ranjan</h3>
-                    <p className="text-lg text-primary font-semibold mb-4">Software Engineer</p>
-                    <p className="text-muted-foreground mb-6 leading-relaxed">
-                      Passionate about creating AI-powered solutions that make complex tasks simple and accessible. With
-                      expertise in modern web technologies and artificial intelligence, Sumit built Sonia AI to
-                      revolutionize how people interact with documents and information.
+        <section id="approach" className="studio-philosophy studio-wrap">
+          <Reveal className="studio-section-label">
+            <span>01 / THE PHILOSOPHY</span>
+            <span>LESS SEARCHING. MORE SEEING.</span>
+          </Reveal>
+          <ReadingManifesto />
+          <GlassMethodCards
+            steps={[
+              {
+                n: "I",
+                label: "The pages",
+                title: "Bring the pages.",
+                art: "pages",
+                text: "The research paper. The annual report. That PDF you keep putting off. Give your documents somewhere to become useful.",
+              },
+              {
+                n: "II",
+                label: "The thread",
+                title: "Pull on a thread.",
+                art: "thread",
+                text: "Ask a question, follow a detail, find the connection. A good conversation takes you further than a search bar.",
+              },
+              {
+                n: "III",
+                label: "The clarity",
+                title: "Leave with clarity.",
+                art: "clarity",
+                text: "Answers grounded in your documents. A fresh perspective on what matters. Room for your next good idea.",
+              },
+            ]}
+          />
+        </section>
+        <section id="workspace" className="studio-experience">
+          <div className="studio-wrap">
+            <Reveal className="studio-section-label">
+              <span>02 / THE EXPERIENCE</span>
+              <span>AN ILLUSTRATIVE CONVERSATION</span>
+            </Reveal>
+            <Reveal className="studio-demo-heading">
+              <h2>
+                A meeting
+                <br />
+                of <em>minds.</em>
+                <span className="studio-heading-star">✳</span>
+              </h2>
+              <p>
+                You bring the question.
+                <br />
+                Sonia finds the thread.
+                <br />
+                <span>Watch a thought take shape below.</span>
+              </p>
+            </Reveal>
+            <Reveal className="studio-demo-frame">
+              <div className="studio-demo-bar">
+                <span>
+                  <i />
+                  <i />
+                  <i />
+                </span>
+                <span>SONIA / THE READING ROOM</span>
+                <Emblem />
+              </div>
+              <div className="studio-demo-content">
+                <aside className="studio-demo-sidebar">
+                  <Brand />
+                  <span className="studio-demo-new">
+                    <Plus size={13} /> New conversation
+                  </span>
+                  <span className="studio-micro">ON YOUR DESK</span>
+                  <span className="studio-demo-file">
+                    <FileText size={15} /> The creative process.pdf
+                  </span>
+                  <div>
+                    <Emblem />
+                    <p>
+                      A little room
+                      <br />
+                      for a bigger thought.
                     </p>
-                    <div className="flex flex-wrap gap-2 justify-center lg:justify-start">
-                      <Badge variant="secondary">AI Development</Badge>
-                      <Badge variant="secondary">Full-Stack Engineering</Badge>
-                      <Badge variant="secondary">Document Processing</Badge>
-                      <Badge variant="secondary">User Experience</Badge>
-                    </div>
                   </div>
+                </aside>
+                <div className="studio-demo-chat">
+                  <ConversationPreview />
                 </div>
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-      </section>
-
-      {/* CTA Section */}
-      <section className="py-20 px-4 sm:px-6 lg:px-8 bg-muted/50">
-        <div className="container mx-auto text-center">
-          <h2 className="text-3xl sm:text-4xl font-bold text-foreground mb-4">
-            Ready to Transform Your Document Workflow?
-          </h2>
-          <p className="text-xl text-muted-foreground mb-8 max-w-2xl mx-auto">
-            Join thousands of users who trust Sonia AI for their document analysis needs.
-          </p>
-          <Link href="/chat">
-            <Button size="lg" className="text-lg px-8">
-              Start Chatting with Sonia
-              <ArrowRight className="ml-2 h-5 w-5" />
-            </Button>
-          </Link>
-        </div>
-      </section>
-
-      {/* Footer */}
-      <footer className="border-t border-border py-12 px-4 sm:px-6 lg:px-8">
-        <div className="container mx-auto">
-          <div className="flex flex-col md:flex-row justify-between items-center">
-            <div className="flex items-center gap-2 mb-4 md:mb-0">
-              <Sparkles className="h-6 w-6 text-primary" />
-              <span className="text-lg font-semibold text-foreground">Sonia AI</span>
-            </div>
-            <div className="flex gap-6 text-sm text-muted-foreground">
-              <Link href="/privacy" className="hover:text-foreground transition-colors">
-                Privacy Policy
-              </Link>
-              <Link href="/terms" className="hover:text-foreground transition-colors">
-                Terms of Service
-              </Link>
-              <Link href="/contact" className="hover:text-foreground transition-colors">
-                Contact
+              </div>
+            </Reveal>
+            <div className="studio-demo-caption">
+              <span>NO SCRIPT TO LEARN. JUST FOLLOW YOUR CURIOSITY.</span>
+              <Link href="/chat">
+                Try your own question <CornerDownRight size={15} />
               </Link>
             </div>
           </div>
-          {/* <div className="mt-8 pt-8 border-t border-border text-center text-sm text-muted-foreground">
-            © 2025 Sonia AI. All rights reserved.
-          </div> */}
-          <div className="mt-8 pt-8 border-t border-border text-center text-sm text-muted-foreground">
-            © Created by SUMIT KUMAR RANJAN
+        </section>
+        <section id="about" className="studio-maker studio-wrap">
+          <Reveal className="studio-maker-seal">
+            <div>
+              <Emblem />
+              <span>
+                HUMAN CURIOSITY
+                <br />
+                MEETS MACHINE INTELLIGENCE
+              </span>
+            </div>
+            <span>BUILT WITH INTENTION. ALWAYS.</span>
+          </Reveal>
+          <Reveal className="studio-maker-copy">
+            <span className="studio-micro">03 / A NOTE FROM THE MAKER</span>
+            <h2>
+              Made for the
+              <br />
+              <em>beautifully curious.</em>
+            </h2>
+            <p>
+              Built by Sumit Kumar Ranjan, Sonia gives your documents a place to
+              become a conversation. A companion for research, reading, and
+              questions that deserve a closer look.
+            </p>
+            <div>
+              <span>Sumit Kumar Ranjan</span>
+              <span>CREATOR OF SONIA</span>
+            </div>
+          </Reveal>
+        </section>
+        <section className="studio-finale">
+          <div className="studio-wrap">
+            <Reveal>
+              <span className="studio-micro">
+                YOUR NEXT GOOD IDEA IS IN THERE.
+              </span>
+              <h2>
+                Go on.
+                <br />
+                <em>Open your mind.</em>
+              </h2>
+              <Link href="/chat" className="studio-finale-link">
+                Enter the reading room{" "}
+                <ArrowUpRight size={38} strokeWidth={1} />
+              </Link>
+            </Reveal>
+            <Emblem className="studio-finale-emblem" />
           </div>
-        </div>
+        </section>
+      </main>
+      <footer className="studio-footer studio-wrap">
+        <Brand />
+        <span>A different kind of intelligence.</span>
+        <a href="#main">
+          BACK TO THE TOP <ArrowUpRight size={14} />
+        </a>
       </footer>
-    </div>
-  )
+    </LandingMotion>
+  );
 }

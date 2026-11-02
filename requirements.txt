@@ -1,19 +1,12 @@
-
-# LangChain + Gemini
-langchain
-langchain-core
-langchain-community
-langchain-google-genai
-
-# requirements.txt
-
+# Runtime dependencies, sized for small servers (e.g. Render's free plan, 512 MB).
+# For Docling parsing and cross-encoder re-ranking, install requirements-full.txt instead.
 fastapi
 uvicorn[standard]
 python-dotenv
 pg8000
 requests
-psycopg2-binary
-sentence-transformers
-llama-parse
-nest-asyncio
-langchain
+pymupdf
+boto3
+python-multipart
+langchain-text-splitters
+pyjwt[crypto]

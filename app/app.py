@@ -1,24 +1,35 @@
 # app/app.py
 
 import logging
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+import os
+from fastapi import Depends, FastAPI, UploadFile, File, Form, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import RedirectResponse, Response
 from requests.exceptions import HTTPError
 
 # --- MODIFIED IMPORTS ---
-from app.db import insert_file, insert_embeddings
+from app.auth import current_user
+from app.db import (insert_file, insert_embeddings, get_document_source,
+                    set_document_source_key, delete_document, owned_document_ids)
 from app.embeddings import get_embedding, get_embeddings_batch
 from app.llm import get_llm_response
 from app.pdf_utils import chunk_text
-from app.llamaparse_utils import process_pdf_with_llamaparse # Replaced Docling with LlamaParse
-from app.retriever import get_reranked_context
+from app.docling_utils import process_pdf_with_docling
+from app.retriever import get_reranked_context, rank_contexts
+from app.document_images import wants_images, requested_image_location
+from app.image_storage import R2ImageStorage, document_prefix, valid_chat_id
+from app.image_db import find_document_images
+from app.image_pipeline import ingest_document_images, image_attachments
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Sonia Advanced RAG API")
 
-origins = [ "http://localhost:3000" ]
+# Comma-separated, e.g. "https://sonia.vercel.app,http://localhost:3000".
+origins = [origin.strip().rstrip("/") for origin in
+           os.getenv("FRONTEND_ORIGINS", "http://localhost:3000").split(",") if origin.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -27,30 +38,63 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.on_event("startup")
+async def warm_up_docling():
+    # Load Docling's layout models in the background so the first upload isn't slow.
+    import threading
+    from app.docling_utils import _converter, docling_enabled
+
+    if not docling_enabled():
+        return
+
+    def load():
+        try:
+            _converter()
+            logger.info("Docling models loaded.")
+        except Exception:
+            logger.exception("Docling warm-up failed; uploads will fall back to PyMuPDF")
+
+    threading.Thread(target=load, daemon=True).start()
+
+
 @app.get("/", tags=["General"])
 async def root():
     return {"message": "Sonia Advanced RAG Chatbot API is running 🚀"}
 
 @app.post("/upload", tags=["Document Handling"])
-async def upload_pdf(file: UploadFile = File(...)):
+async def upload_pdf(file: UploadFile = File(...), chat_id: str | None = Form(None),
+                     user_id: str = Depends(current_user)):
+    if not valid_chat_id(chat_id):
+        raise HTTPException(status_code=422, detail="chat_id may only contain letters, digits, '-' and '_' (max 64)")
     try:
-        logger.info(f"Receiving file: {file.filename}")
+        logger.info(f"Receiving file: {file.filename} (chat {chat_id})")
         file_bytes = await file.read()
-        
-        file_id = insert_file(file.filename, file_bytes)
+
+        # With R2 configured the PDF goes to users/{user}/chats/{chat}/documents/{id}/source.pdf
+        # and Postgres keeps only the key; without it the bytes stay in Postgres.
+        storage = R2ImageStorage.from_env()
+        file_id = insert_file(file.filename, None if storage else file_bytes, chat_id, user_id)
+        prefix = document_prefix(user_id, chat_id, file_id)
+        if storage:
+            try:
+                source_key = storage.upload_pdf(prefix, file_bytes)
+                set_document_source_key(file_id, source_key)
+            except Exception:
+                delete_document(file_id)
+                raise
         logger.info(f"File '{file.filename}' stored with ID: {file_id}")
 
-        # --- QUALITY UPGRADE: Use LlamaParse for layout-aware parsing ---
-        logger.info("Processing document with LlamaParse...")
-        # THIS IS THE MAIN LOGIC CHANGE
-        rich_content = process_pdf_with_llamaparse(file_bytes, file.filename)
+        # Layout-aware Markdown via Docling, run off the event loop: conversion takes seconds.
+        logger.info("Processing document with Docling...")
+        rich_content = await run_in_threadpool(process_pdf_with_docling, file_bytes, file.filename)
         
         if not rich_content:
-            raise HTTPException(status_code=500, detail="Failed to process document with LlamaParse.")
+            raise HTTPException(status_code=422, detail="No text could be read from this PDF. "
+                                "If it is a scanned document, try a PDF with selectable text.")
         
         # --- Chunk the high-quality Markdown content ---
         chunks = chunk_text(rich_content)
-        logger.info(f"Extracted {len(chunks)} chunks from the LlamaParse output.")
+        logger.info(f"Extracted {len(chunks)} chunks from the Docling output.")
 
         # --- SPEED UPGRADE: Generate all embeddings in one batch ---
         logger.info(f"Generating embeddings for {len(chunks)} chunks in a single batch.")
@@ -61,8 +105,23 @@ async def upload_pdf(file: UploadFile = File(...)):
         for i, chunk in enumerate(chunks):
             insert_embeddings(file_id, chunk, all_embeddings[i])
 
-        return {"file_id": file_id, "filename": file.filename, "chunks_stored": len(chunks)}
+        images_stored = 0
+        images_status = "disabled"
+        warnings = []
+        try:
+            if storage:
+                images_stored = ingest_document_images(file_id, file_bytes, rich_content, storage, prefix)
+                images_status = "ready"
+        except Exception:
+            logger.exception("Image processing failed for document %s", file_id)
+            images_status = "failed"
+            warnings.append("Text is ready, but image processing failed. Check the server configuration and logs.")
 
+        return {"file_id": file_id, "filename": file.filename, "chunks_stored": len(chunks),
+                "images_stored": images_stored, "images_status": images_status, "warnings": warnings}
+
+    except HTTPException:
+        raise
     except HTTPError as e:
         logger.error(f"HTTPError during API call: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to communicate with an external AI service: {e.response.text}")
@@ -71,14 +130,55 @@ async def upload_pdf(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"An internal server error occurred: {str(e)}")
 
 
-# The /chat endpoint does not need to be changed. It works perfectly with the new system.
+# Image URLs come from retrieved metadata; the language model never invents them.
 @app.post("/chat", tags=["Chat"])
-async def chat(query: str = Form(...)):
+async def chat(query: str = Form(...), document_ids: list[int] | None = Form(None),
+               scope_documents: bool = Form(False), include_images: bool = Form(False),
+               user_id: str = Depends(current_user)):
     try:
         logger.info(f"Received query: '{query}'")
         query_embedding = get_embedding(query)
         logger.info("Starting advanced retrieval with re-ranking...")
-        context = get_reranked_context(query, query_embedding)
+        requested = (document_ids or []) if scope_documents else document_ids
+        # Only the signed-in user's documents are ever searched (None = all of theirs).
+        scope = owned_document_ids(user_id, requested)
+        context = get_reranked_context(query, query_embedding, document_ids=scope)
+
+        images = []
+        image_status = "not_requested"
+        image_notice = None
+        if include_images or wants_images(query):
+            image_status = "disabled"
+            image_notice = "Image storage is not configured on this server."
+            try:
+                storage = R2ImageStorage.from_env()
+                if storage:
+                    page_number, image_number = requested_image_location(query)
+                    candidates = find_document_images(query_embedding, document_ids=scope,
+                                                       page_number=page_number, image_number=image_number)
+                    selected = rank_contexts(query, candidates, text_key="search_text", limit=5)
+                    images = image_attachments(selected, storage)
+                    image_status = "ready" if images else "not_found"
+                    image_notice = None if images else "No indexed image matched the requested document or location."
+                    if selected:
+                        image_context = "\n\n".join(
+                            f"Image ID: {image['image_id']}; document {image['document_id']}; "
+                            f"page {image['page_number']}; image {image['image_number']}\n"
+                            + image["search_text"] for image in selected
+                        )
+                        context += "\n\nImage source locations and surrounding text:\n" + image_context
+            except Exception:
+                logger.exception("Image retrieval failed")
+                image_status = "failed"
+                image_notice = "Image retrieval is temporarily unavailable."
+
+            context += (
+                "\n\nImage retrieval status: " + image_status + ". " + (image_notice or "")
+                + "\nOnly the image locations and nearby text are available; the image pixels "
+                "have not been analyzed. Do not invent visual details or image URLs. "
+                "The application displays retrieved images separately. "
+                "If no image was found, say so rather than claiming to display one."
+            )
         
         if not context:
             logger.warning("No relevant context found after re-ranking for the query.")
@@ -87,7 +187,8 @@ async def chat(query: str = Form(...)):
 
         answer = get_llm_response(query, context)
         logger.info("Generated LLM response.")
-        return {"query": query, "answer": answer}
+        return {"query": query, "answer": answer, "images": images,
+                "image_status": image_status, "image_notice": image_notice}
         
     except HTTPError as e:
         logger.error(f"HTTPError during LLM call: {e}")
@@ -95,3 +196,46 @@ async def chat(query: str = Form(...)):
     except Exception as e:
         logger.error(f"An unexpected error occurred during chat: {e}")
         raise HTTPException(status_code=500, detail=f"An internal server error occurred: {str(e)}")
+
+
+@app.get("/documents/{document_id}/source", tags=["Document Handling"])
+async def document_source(document_id: int, user_id: str = Depends(current_user)):
+    source = get_document_source(document_id, user_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if source["source_key"]:
+        storage = R2ImageStorage.from_env()
+        if storage is None:
+            raise HTTPException(status_code=503, detail="Document storage is not configured")
+        # Browsers keep the #page=N fragment across this redirect.
+        return RedirectResponse(storage.sign(source["source_key"]), status_code=307)
+    return Response(source["file"], media_type="application/pdf", headers={
+        "Content-Disposition": f'inline; filename="document-{document_id}.pdf"',
+    })
+
+
+@app.get("/documents/{document_id}/images", tags=["Document Images"])
+async def list_images(document_id: int, page_number: int | None = Query(None, ge=1),
+                      image_number: int | None = Query(None, ge=1),
+                      limit: int = Query(25, ge=1, le=100), user_id: str = Depends(current_user)):
+    if not owned_document_ids(user_id, [document_id]):
+        raise HTTPException(status_code=404, detail="Document not found")
+    storage = R2ImageStorage.from_env()
+    if storage is None:
+        raise HTTPException(status_code=503, detail="Image storage is not configured")
+    results = find_document_images(document_ids=[document_id], page_number=page_number,
+                                   image_number=image_number, limit=limit)
+    return {"images": image_attachments(results, storage)}
+
+
+@app.get("/documents/{document_id}/images/{image_id}", tags=["Document Images"])
+async def get_image(document_id: int, image_id: str, user_id: str = Depends(current_user)):
+    if not owned_document_ids(user_id, [document_id]):
+        raise HTTPException(status_code=404, detail="Image not found in this document")
+    storage = R2ImageStorage.from_env()
+    if storage is None:
+        raise HTTPException(status_code=503, detail="Image storage is not configured")
+    results = find_document_images(document_ids=[document_id], image_id=image_id, limit=1)
+    if not results:
+        raise HTTPException(status_code=404, detail="Image not found in this document")
+    return image_attachments(results, storage)[0]

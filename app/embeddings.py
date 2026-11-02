@@ -9,7 +9,16 @@ import time
 logger = logging.getLogger(__name__)
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-MODEL_NAME = "text-embedding-004"
+MODEL_NAME = os.getenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001")
+# Must match the vector(768) columns in app/schema.sql.
+EMBEDDING_DIMENSIONS = 768
+
+
+def _normalize(values: List[float]) -> List[float]:
+    # Reduced-size Gemini embeddings aren't unit length; retrieval uses L2 distance,
+    # so normalise to keep distances comparable across texts.
+    norm = sum(v * v for v in values) ** 0.5
+    return [v / norm for v in values] if norm else values
 
 # --- THIS IS THE CRITICAL CONSTANT ---
 # Google's API limit is 100 per batch. We'll use a slightly smaller number for safety.
@@ -19,12 +28,11 @@ def get_embedding(text: str) -> List[float]:
     """Generates an embedding for a SINGLE text string."""
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:embedContent?key={GOOGLE_API_KEY}"
     headers = {"Content-Type": "application/json"}
-    data = {"content": {"parts": [{"text": text}]}}
+    data = {"content": {"parts": [{"text": text}]}, "outputDimensionality": EMBEDDING_DIMENSIONS}
 
     response = requests.post(url, headers=headers, json=data)
     response.raise_for_status()
-    embedding = response.json()["embedding"]["values"]
-    return embedding
+    return _normalize(response.json()["embedding"]["values"])
 
 
 def get_embeddings_batch(texts: List[str]) -> List[List[float]]:
@@ -45,7 +53,8 @@ def get_embeddings_batch(texts: List[str]) -> List[List[float]]:
         # Prepare the request for the current sub-batch
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:batchEmbedContents?key={GOOGLE_API_KEY}"
         headers = {"Content-Type": "application/json"}
-        requests_list = [{"model": f"models/{MODEL_NAME}", "content": {"parts": [{"text": text}]}} for text in batch_texts]
+        requests_list = [{"model": f"models/{MODEL_NAME}", "content": {"parts": [{"text": text}]},
+                          "outputDimensionality": EMBEDDING_DIMENSIONS} for text in batch_texts]
         data = {"requests": requests_list}
 
         # Make the API call for this specific sub-batch
@@ -53,7 +62,7 @@ def get_embeddings_batch(texts: List[str]) -> List[List[float]]:
         response.raise_for_status()
         
         # Extract the embeddings from the response and add them to our main list
-        batch_embeddings = [entry["values"] for entry in response.json()["embeddings"]]
+        batch_embeddings = [_normalize(entry["values"]) for entry in response.json()["embeddings"]]
         all_embeddings.extend(batch_embeddings)
         
         # Optional: Add a small delay between batches to be a good API citizen

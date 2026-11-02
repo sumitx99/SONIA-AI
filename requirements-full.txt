@@ -1,0 +1,5 @@
+# Everything in requirements.txt plus the heavy, torch-based extras (~2 GB RAM in use):
+# Docling layout-aware PDF parsing (PDF_PARSER=docling) and cross-encoder re-ranking.
+-r requirements.txt
+docling
+sentence-transformers

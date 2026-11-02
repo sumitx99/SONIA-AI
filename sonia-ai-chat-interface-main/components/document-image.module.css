@@ -1,0 +1,254 @@
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  align-items: start;
+  gap: 12px;
+  max-width: 660px;
+  margin-top: 20px;
+}
+.figure {
+  margin: 20px 0 0;
+  overflow: hidden;
+  max-width: 660px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+}
+.grid .figure { margin: 0; }
+
+/* Document figures are usually drawn for white paper; keep that mat in dark mode too. */
+.mat {
+  display: flex;
+  justify-content: center;
+  padding: 12px;
+  background: #fff;
+  border-bottom: 1px solid var(--border);
+}
+.frame {
+  position: relative;
+  display: block;
+  width: 100%;
+  max-height: 440px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+}
+.compact .frame { max-height: 220px; }
+.frame img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-height: inherit;
+  object-fit: contain;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+.frame img[data-ready="true"] { opacity: 1; }
+.frame:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+.skeleton {
+  position: absolute;
+  inset: 0;
+  min-height: 120px;
+  border-radius: 4px;
+  background: linear-gradient(100deg, #efe9de 30%, #f8f4ec 50%, #efe9de 70%);
+  background-size: 300% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+/* Without width/height from the backend there is no reserved ratio, so give the skeleton room. */
+.frame:not([style]) { min-height: 160px; }
+@keyframes shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: 0 0; }
+}
+.enlarge {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: #fff;
+  background: rgb(30 26 22 / 0.65);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.frame:hover .enlarge, .frame:focus-visible .enlarge { opacity: 1; }
+@media (hover: none) { .enlarge { opacity: 1; } }
+
+.unavailable {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 28px 16px;
+  color: #6b6052;
+  text-align: center;
+  font-size: 13px;
+}
+.unavailable button, .caption a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.unavailable button { color: #743f32; }
+.unavailable button:disabled { opacity: 0.6; cursor: progress; }
+.spin { animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.caption {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 12px 16px;
+  overflow-wrap: anywhere;
+}
+.caption strong { font-size: 13px; }
+.heading, .context small {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.caption a { font-size: 13px; }
+.compact .caption { padding: 10px 12px; }
+
+.context {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+.compact .context { padding: 10px 12px; }
+.context summary { cursor: pointer; }
+.context > div { margin-top: 16px; }
+.context p {
+  margin: 6px 0 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+/* Lightbox */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgb(20 17 14 / 0.94);
+  backdrop-filter: blur(4px);
+}
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 61;
+  display: flex;
+  flex-direction: column;
+  color: #f4eddf;
+  outline: none;
+}
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 12px 10px 20px;
+  background: rgb(20 17 14 / 0.6);
+}
+.toolbar button, .toolbar a {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  color: inherit;
+}
+.toolbar button:hover, .toolbar a:hover { background: rgb(255 255 255 / 0.12); }
+.toolbar :focus-visible, .nav:focus-visible { outline: 2px solid #f4eddf; outline-offset: 2px; }
+.title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  margin-right: auto;
+}
+.title h2 { font-size: 15px; font-weight: 600; }
+.title span {
+  overflow: hidden;
+  color: #c9bda9;
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.counter {
+  margin-right: 8px;
+  color: #c9bda9;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.stage {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  padding: 16px 64px 32px;
+  overflow: auto;
+}
+.stage img {
+  margin: auto;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 4px;
+  background: #fff;
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.45);
+  cursor: zoom-in;
+}
+.zoomed img {
+  max-width: none;
+  max-height: none;
+  cursor: zoom-out;
+}
+.stageError {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin: auto;
+  color: #c9bda9;
+}
+.nav {
+  position: absolute;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  color: #f4eddf;
+  background: rgb(20 17 14 / 0.7);
+  transform: translateY(-50%);
+}
+.nav:hover { background: rgb(60 52 44 / 0.9); }
+.prev { left: 12px; }
+.next { right: 12px; }
+
+@media (max-width: 640px) {
+  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .mat { padding: 8px; }
+  .compact .frame { max-height: 160px; }
+  .stage { padding: 8px 8px 72px; }
+  .nav { top: auto; bottom: 16px; transform: none; }
+  .prev { left: calc(50% - 56px); }
+  .next { right: calc(50% - 56px); }
+  .toolbar { padding-left: 12px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton, .spin { animation: none; }
+  .frame img { transition: none; }
+}

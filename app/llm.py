@@ -2,12 +2,14 @@ import os
 import requests
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+# Google retires model versions; override in .env instead of editing code.
+CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", "gemini-3.5-flash")
 
 def get_llm_response(query: str, context: str):
     """
     Use Google Gemini to generate an answer with context, a defined persona, and safety guardrails.
     """
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GOOGLE_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{CHAT_MODEL}:generateContent?key={GOOGLE_API_KEY}"
     
     headers = {"Content-Type": "application/json"}
 

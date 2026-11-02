@@ -1,506 +1,566 @@
-"use client"
+"use client";
 
-import type React from "react"
-
-import { useState, useRef } from "react"
-import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { PlusSquare, MessageSquare, Sparkles, User, Paperclip, ArrowUp, Bot, Edit2, Trash2 } from "lucide-react"
-
-// Import API functions
-import { sendMessage, uploadPDF, handleApiError } from "@/lib/api"
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type KeyboardEvent,
+} from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { AnimatePresence, motion, MotionConfig } from "motion/react";
+import {
+  ArrowUp,
+  ArrowUpRight,
+  Check,
+  FileText,
+  LogOut,
+  Menu,
+  MessageSquare,
+  Paperclip,
+  Pencil,
+  Plus,
+  Trash2,
+  X,
+} from "lucide-react";
+import { Brand, Emblem } from "@/components/brand";
+import { DocumentImageGallery } from "@/components/document-image";
+import { sendMessage, uploadPDF, handleApiError, type ImageAttachment } from "@/lib/api";
+import { supabase } from "@/lib/supabase";
+import { useSession } from "@/lib/use-session";
 
 interface Message {
-  id: string
-  content: string
-  sender: "user" | "bot"
-  timestamp: Date
+  id: string;
+  content: string;
+  sender: "user" | "bot";
+  error?: boolean;
+  images?: ImageAttachment[];
+  notice?: string | null;
+}
+interface ChatSession {
+  id: string;
+  title: string;
+  messages: Message[];
+  documents: string[];
+  documentIds: number[];
 }
 
-interface ChatSession {
-  id: string
-  title: string
-  messages: Message[]
-  lastMessage: Date
-}
+const suggestions = [
+  "Summarize the key ideas",
+  "What are the main takeaways?",
+  "Explain the document in simple terms",
+];
 
 export default function SoniaChatInterface() {
-  const [chatSessions, setChatSessions] = useState<ChatSession[]>([])
-  const [currentChatId, setCurrentChatId] = useState<string | null>(null)
-  const [inputValue, setInputValue] = useState("")
-  const [isLoading, setIsLoading] = useState(false)
-  const [isUploading, setIsUploading] = useState(false)
-  const [editingChatId, setEditingChatId] = useState<string | null>(null)
-  const [editingTitle, setEditingTitle] = useState("")
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  
-  // Get current chat session
-  const currentChat = chatSessions.find(chat => chat.id === currentChatId)
-  const messages = currentChat?.messages || []
+  const router = useRouter();
+  const { session, ready } = useSession();
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [currentId, setCurrentId] = useState<string | null>(null);
+  const [input, setInput] = useState("");
+  const [pending, setPending] = useState<{
+    id: string;
+    kind: "answer" | "upload";
+  } | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [title, setTitle] = useState("");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [fileError, setFileError] = useState("");
+  const fileInput = useRef<HTMLInputElement>(null);
+  const textarea = useRef<HTMLTextAreaElement>(null);
+  const end = useRef<HTMLDivElement>(null);
+  const busy = useRef(false);
+  const current = sessions.find((session) => session.id === currentId);
+  const messages = current?.messages ?? [];
 
-  // Create a new chat session
-  const createNewChat = () => {
-    const newChatId = Date.now().toString()
-    const newChat: ChatSession = {
-      id: newChatId,
-      title: "New Chat",
-      messages: [],
-      lastMessage: new Date()
-    }
-    
-    setChatSessions(prev => [newChat, ...prev])
-    setCurrentChatId(newChatId)
+  // Signed-out visitors (or an expired session) go to the sign-in page.
+  useEffect(() => {
+    if (ready && !session) router.replace("/auth?next=/chat");
+  }, [ready, session, router]);
+
+  useEffect(() => {
+    end.current?.scrollIntoView({ behavior: "instant", block: "end" });
+  }, [messages.length, pending]);
+
+  function newChat() {
+    const id = crypto.randomUUID();
+    setSessions((previous) => [
+      { id, title: "Untitled conversation", messages: [], documents: [], documentIds: [] },
+      ...previous,
+    ]);
+    setCurrentId(id);
+    setInput("");
+    setFileError("");
+    setSidebarOpen(false);
+    textarea.current?.focus();
+    return id;
   }
 
-  // Switch to a different chat
-  const switchToChat = (chatId: string) => {
-    setCurrentChatId(chatId)
+  function append(id: string, message: Message) {
+    setSessions((previous) =>
+      previous.map((session) =>
+        session.id === id
+          ? { ...session, messages: [...session.messages, message] }
+          : session,
+      ),
+    );
   }
 
-  // Delete a chat session
-  const deleteChat = (chatId: string, e: React.MouseEvent) => {
-    e.stopPropagation()
-    setChatSessions(prev => prev.filter(chat => chat.id !== chatId))
-    
-    if (currentChatId === chatId) {
-      const remainingChats = chatSessions.filter(chat => chat.id !== chatId)
-      setCurrentChatId(remainingChats.length > 0 ? remainingChats[0].id : null)
-    }
-  }
-
-  // Start editing chat title
-  const startEditingTitle = (chatId: string, currentTitle: string, e: React.MouseEvent) => {
-    e.stopPropagation()
-    setEditingChatId(chatId)
-    setEditingTitle(currentTitle)
-  }
-
-  // Save edited title
-  const saveEditedTitle = (chatId: string) => {
-    if (editingTitle.trim()) {
-      setChatSessions(prev => prev.map(chat => 
-        chat.id === chatId 
-          ? { ...chat, title: editingTitle.trim() }
-          : chat
-      ))
-    }
-    setEditingChatId(null)
-    setEditingTitle("")
-  }
-
-  // Cancel editing
-  const cancelEditing = () => {
-    setEditingChatId(null)
-    setEditingTitle("")
-  }
-
-  // Update chat title based on first message
-  const updateChatTitle = (chatId: string, firstMessage: string) => {
-    const title = firstMessage.length > 30 
-      ? firstMessage.substring(0, 30) + "..."
-      : firstMessage
-    
-    setChatSessions(prev => prev.map(chat =>
-      chat.id === chatId 
-        ? { ...chat, title }
-        : chat
-    ))
-  }
-
-  const handleSendMessage = async () => {
-    if (!inputValue.trim()) return
-
-    // Create new chat if none exists
-    let chatId = currentChatId
-    if (!chatId) {
-      createNewChat()
-      chatId = Date.now().toString()
-    }
-
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      content: inputValue,
-      sender: "user",
-      timestamp: new Date(),
-    }
-
-    // Add user message to current chat
-    setChatSessions(prev => prev.map(chat =>
-      chat.id === chatId
-        ? { 
-            ...chat, 
-            messages: [...chat.messages, userMessage],
-            lastMessage: new Date()
-          }
-        : chat
-    ))
-
-    // Update chat title if this is the first message
-    if (messages.length === 0) {
-      updateChatTitle(chatId, inputValue)
-    }
-
-    setInputValue("")
-    setIsLoading(true)
-
+  async function ask() {
+    const query = input.trim();
+    if (!query || busy.current) return;
+    busy.current = true;
+    const id = currentId ?? newChat();
+    append(id, { id: crypto.randomUUID(), content: query, sender: "user" });
+    if (!messages.length)
+      setSessions((previous) =>
+        previous.map((session) =>
+          session.id === id
+            ? {
+                ...session,
+                title: query.length > 36 ? `${query.slice(0, 36)}…` : query,
+              }
+            : session,
+        ),
+      );
+    setInput("");
+    setPending({ id, kind: "answer" });
     try {
-      const response = await sendMessage(inputValue)
-      
-      const botMessage: Message = {
-        id: (Date.now() + 1).toString(),
+      const response = await sendMessage(query, current?.documentIds ?? []);
+      append(id, {
+        id: crypto.randomUUID(),
         content: response.answer,
         sender: "bot",
-        timestamp: new Date(),
-      }
-
-      // Add bot message to current chat
-      setChatSessions(prev => prev.map(chat =>
-        chat.id === chatId
-          ? { 
-              ...chat, 
-              messages: [...chat.messages, botMessage],
-              lastMessage: new Date()
-            }
-          : chat
-      ))
+        images: response.images,
+        notice: response.image_notice,
+      });
     } catch (error) {
-      console.error('Error sending message:', error)
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        content: `Sorry, I encountered an error: ${handleApiError(error)}. Please make sure the backend is running.`,
+      append(id, {
+        id: crypto.randomUUID(),
+        content: `I couldn’t get an answer. ${handleApiError(error)}. Please check the connection and try again.`,
         sender: "bot",
-        timestamp: new Date(),
-      }
-
-      setChatSessions(prev => prev.map(chat =>
-        chat.id === chatId
-          ? { 
-              ...chat, 
-              messages: [...chat.messages, errorMessage],
-              lastMessage: new Date()
-            }
-          : chat
-      ))
+        error: true,
+      });
     } finally {
-      setIsLoading(false)
+      busy.current = false;
+      setPending(null);
     }
   }
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-
-    if (!file.name.toLowerCase().endsWith('.pdf')) {
-      alert('Please select a PDF file.')
-      return
+  async function upload(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || busy.current) return;
+    if (!file.name.toLowerCase().endsWith(".pdf")) {
+      setFileError("Please choose a PDF document.");
+      return;
     }
-
-    // Create new chat if none exists
-    let chatId = currentChatId
-    if (!chatId) {
-      createNewChat()
-      chatId = Date.now().toString()
-    }
-
-    setIsUploading(true)
+    setFileError("");
+    busy.current = true;
+    const id = currentId ?? newChat();
+    setPending({ id, kind: "upload" });
     try {
-      const response = await uploadPDF(file)
-      
-      const uploadMessage: Message = {
-        id: Date.now().toString(),
-        content: `Successfully uploaded "${file.name}" - ${response.chunks_stored} chunks processed. You can now ask questions about this document!`,
+      const response = await uploadPDF(file, id);
+      if (response.success === false)
+        throw new Error(
+          response.message || "The document could not be processed",
+        );
+      setSessions((previous) =>
+        previous.map((session) =>
+          session.id === id
+            ? {
+                ...session,
+                documents: [
+                  ...session.documents,
+                  response.filename || file.name,
+                ],
+                documentIds: [...session.documentIds, response.file_id],
+                title: session.messages.length ? session.title : file.name,
+              }
+            : session,
+        ),
+      );
+      append(id, {
+        id: crypto.randomUUID(),
+        content: `“${file.name}” is ready.${response.images_status === "ready" ? ` ${response.images_stored ?? 0} images are available—ask to see an image or specify a page.` : ""} What would you like to discover?`,
         sender: "bot",
-        timestamp: new Date(),
-      }
-
-      setChatSessions(prev => prev.map(chat =>
-        chat.id === chatId
-          ? { 
-              ...chat, 
-              messages: [...chat.messages, uploadMessage],
-              lastMessage: new Date(),
-              title: messages.length === 0 ? `Chat about ${file.name}` : chat.title
-            }
-          : chat
-      ))
+        notice: response.warnings?.join(" ") || (response.images_status === "disabled"
+          ? "Image extraction is unavailable until image storage is configured." : null),
+      });
     } catch (error) {
-      console.error('Upload error:', error)
-      const errorMessage: Message = {
-        id: Date.now().toString(),
-        content: `Upload failed: ${handleApiError(error)}. Please make sure the backend is running and try again.`,
+      append(id, {
+        id: crypto.randomUUID(),
+        content: `The document couldn’t be uploaded. ${handleApiError(error)}. Please try again.`,
         sender: "bot",
-        timestamp: new Date(),
-      }
-
-      setChatSessions(prev => prev.map(chat =>
-        chat.id === chatId
-          ? { 
-              ...chat, 
-              messages: [...chat.messages, errorMessage],
-              lastMessage: new Date()
-            }
-          : chat
-      ))
+        error: true,
+      });
     } finally {
-      setIsUploading(false)
-      if (fileInputRef.current) {
-        fileInputRef.current.value = ''
-      }
+      busy.current = false;
+      setPending(null);
     }
   }
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault()
-      handleSendMessage()
+  function remove(id: string) {
+    setSessions((previous) => previous.filter((session) => session.id !== id));
+    if (currentId === id) {
+      setCurrentId(null);
+      setInput("");
+      setFileError("");
     }
   }
 
-  const handleEditKeyPress = (e: React.KeyboardEvent, chatId: string) => {
-    if (e.key === "Enter") {
-      saveEditedTitle(chatId)
-    } else if (e.key === "Escape") {
-      cancelEditing()
+  function saveTitle(id: string) {
+    if (title.trim())
+      setSessions((previous) =>
+        previous.map((session) =>
+          session.id === id ? { ...session, title: title.trim() } : session,
+        ),
+      );
+    setEditingId(null);
+  }
+
+  async function signOut() {
+    await supabase.auth.signOut();
+    router.replace("/auth");
+  }
+
+  function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      !event.nativeEvent.isComposing
+    ) {
+      event.preventDefault();
+      void ask();
     }
+  }
+
+
+  if (!session) {
+    return (
+      <main className="chat-gate" role="status">
+        {ready ? "Taking you to sign in…" : "Opening your workspace…"}
+      </main>
+    );
   }
 
   return (
-    <TooltipProvider>
-      <div className="flex h-screen bg-background">
-        {/* Left Sidebar */}
-        <div className="w-64 bg-sidebar border-r border-sidebar-border flex flex-col">
-          {/* New Chat Button */}
-          <div className="p-4">
-            <Button
-              variant="outline"
-              className="w-full justify-start gap-2 bg-sidebar-accent hover:bg-sidebar-accent/80 border-sidebar-border text-sidebar-accent-foreground"
-              onClick={createNewChat}
+    <MotionConfig reducedMotion="user">
+      <div className="chat-app">
+        {sidebarOpen && (
+          <button
+            className="sidebar-scrim"
+            aria-label="Close navigation"
+            onClick={() => setSidebarOpen(false)}
+          />
+        )}
+        <aside
+          id="chat-sidebar"
+          className={`chat-sidebar ${sidebarOpen ? "is-open" : ""}`}
+          aria-label="Conversations"
+        >
+          <div className="sidebar-brand">
+            <Brand />
+            <button
+              className="icon-button mobile-only"
+              aria-label="Close navigation"
+              onClick={() => setSidebarOpen(false)}
             >
-              <PlusSquare className="h-4 w-4" />
-              New Chat
-            </Button>
+              <X size={18} />
+            </button>
           </div>
-
-          {/* Chat History */}
-          <div className="flex-1 px-4">
-            <h3 className="text-sm font-medium text-sidebar-foreground mb-3">Chat History</h3>
-            <ScrollArea className="h-full">
-              <div className="space-y-2">
-                {chatSessions.map((chat) => (
-                  <div
-                    key={chat.id}
-                    className={`group relative rounded-lg ${
-                      currentChatId === chat.id ? 'bg-sidebar-accent' : ''
-                    }`}
-                  >
-                    <Button
-                      variant="ghost"
-                      className={`w-full justify-start gap-2 h-auto p-3 text-left hover:bg-sidebar-accent text-sidebar-foreground hover:text-sidebar-accent-foreground ${
-                        currentChatId === chat.id ? 'bg-sidebar-accent text-sidebar-accent-foreground' : ''
-                      }`}
-                      onClick={() => switchToChat(chat.id)}
+          <button className="button button-ink new-chat" onClick={newChat}>
+            <Plus size={16} /> A fresh conversation
+          </button>
+          <div className="sidebar-section-label mono">
+            YOUR CONVERSATIONS{" "}
+            <span>{String(sessions.length).padStart(2, "0")}</span>
+          </div>
+          <div className="session-list">
+            {!sessions.length && (
+              <p className="sidebar-empty">
+                Every good discovery
+                <br />
+                starts with a question.
+              </p>
+            )}
+            {sessions.map((session) => (
+              <div
+                key={session.id}
+                className={`session-row ${session.id === currentId ? "active" : ""}`}
+              >
+                {editingId === session.id ? (
+                  <div className="session-edit">
+                    <input
+                      aria-label="Conversation title"
+                      value={title}
+                      onChange={(event) => setTitle(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") saveTitle(session.id);
+                        if (event.key === "Escape") setEditingId(null);
+                      }}
+                      autoFocus
+                    />
+                    <button
+                      className="icon-button"
+                      aria-label="Save title"
+                      onClick={() => saveTitle(session.id)}
                     >
-                      <MessageSquare className="h-4 w-4 flex-shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        {editingChatId === chat.id ? (
-                          <Input
-                            value={editingTitle}
-                            onChange={(e) => setEditingTitle(e.target.value)}
-                            onKeyDown={(e) => handleEditKeyPress(e, chat.id)}
-                            onBlur={() => saveEditedTitle(chat.id)}
-                            className="text-sm h-auto p-0 border-0 bg-transparent focus-visible:ring-1"
-                            autoFocus
-                            onClick={(e) => e.stopPropagation()}
-                          />
-                        ) : (
-                          <>
-                            <div className="text-sm font-medium truncate">{chat.title}</div>
-                            <div className="text-xs text-sidebar-foreground/60">
-                              {chat.lastMessage.toLocaleDateString()}
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    </Button>
-                    
-                    {/* Action buttons - show on hover */}
-                    <div className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 flex gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6 hover:bg-sidebar-border"
-                        onClick={(e) => startEditingTitle(chat.id, chat.title, e)}
+                      <Check size={14} />
+                    </button>
+                    <button
+                      className="icon-button"
+                      aria-label="Cancel rename"
+                      onClick={() => setEditingId(null)}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      className="session-select"
+                      aria-current={
+                        session.id === currentId ? "page" : undefined
+                      }
+                      onClick={() => {
+                        setCurrentId(session.id);
+                        setInput("");
+                        setFileError("");
+                        setSidebarOpen(false);
+                      }}
+                    >
+                      <MessageSquare size={15} />
+                      <span>{session.title}</span>
+                    </button>
+                    <div className="session-actions">
+                      <button
+                        className="icon-button"
+                        aria-label={`Rename ${session.title}`}
+                        onClick={() => {
+                          setEditingId(session.id);
+                          setTitle(session.title);
+                        }}
                       >
-                        <Edit2 className="h-3 w-3" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6 hover:bg-destructive hover:text-destructive-foreground"
-                        onClick={(e) => deleteChat(chat.id, e)}
+                        <Pencil size={13} />
+                      </button>
+                      <button
+                        className="icon-button"
+                        disabled={pending?.id === session.id}
+                        aria-label={`Delete ${session.title}`}
+                        onClick={() => remove(session.id)}
                       >
-                        <Trash2 className="h-3 w-3" />
-                      </Button>
+                        <Trash2 size={13} />
+                      </button>
                     </div>
-                  </div>
-                ))}
-              </div>
-            </ScrollArea>
-          </div>
-
-          {/* User Profile */}
-          <div className="p-4 border-t border-sidebar-border">
-            <div className="flex items-center gap-3">
-              <Avatar className="h-8 w-8">
-                <AvatarFallback className="bg-sidebar-primary text-sidebar-primary-foreground">
-                  <User className="h-4 w-4" />
-                </AvatarFallback>
-              </Avatar>
-              <span className="text-sm font-medium text-sidebar-foreground">User</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Main Chat Area */}
-        <div className="flex-1 flex flex-col bg-background">
-          {/* Chat Messages */}
-          <ScrollArea className="flex-1 p-6">
-            {messages.length === 0 ? (
-              // Welcome Message
-              <div className="flex flex-col items-center justify-center h-full text-center space-y-4">
-                <Avatar className="h-16 w-16 bg-primary">
-                  <AvatarFallback className="bg-primary text-primary-foreground">
-                    <Sparkles className="h-8 w-8" />
-                  </AvatarFallback>
-                </Avatar>
-                <div className="space-y-2">
-                  <h1 className="text-2xl font-bold text-foreground">Sonia AI</h1>
-                  <p className="text-muted-foreground max-w-md text-balance">
-                    Your lovable document assistant. Upload a PDF or ask me anything!
-                  </p>
-                </div>
-              </div>
-            ) : (
-              // Chat Messages
-              <div className="space-y-6 max-w-4xl mx-auto">
-                {messages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={`flex gap-4 ${message.sender === "user" ? "justify-end" : "justify-start"}`}
-                  >
-                    {message.sender === "bot" && (
-                      <Avatar className="h-8 w-8 bg-primary flex-shrink-0">
-                        <AvatarFallback className="bg-primary text-primary-foreground">
-                          <Bot className="h-4 w-4" />
-                        </AvatarFallback>
-                      </Avatar>
-                    )}
-
-                    <Card
-                      className={`max-w-[70%] p-4 ${
-                        message.sender === "user"
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-card text-card-foreground"
-                      }`}
-                    >
-                      <p className="text-sm leading-relaxed">{message.content}</p>
-                    </Card>
-
-                    {message.sender === "user" && (
-                      <Avatar className="h-8 w-8 flex-shrink-0">
-                        <AvatarFallback className="bg-muted text-muted-foreground">
-                          <User className="h-4 w-4" />
-                        </AvatarFallback>
-                      </Avatar>
-                    )}
-                  </div>
-                ))}
-
-                {/* Loading Indicator */}
-                {isLoading && (
-                  <div className="flex gap-4 justify-start">
-                    <Avatar className="h-8 w-8 bg-primary flex-shrink-0">
-                      <AvatarFallback className="bg-primary text-primary-foreground">
-                        <Bot className="h-4 w-4" />
-                      </AvatarFallback>
-                    </Avatar>
-                    <Card className="max-w-[70%] p-4 bg-card text-card-foreground">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm">Sonia is typing</span>
-                        <div className="flex gap-1">
-                          <div className="w-1 h-1 bg-primary rounded-full animate-pulse"></div>
-                          <div
-                            className="w-1 h-1 bg-primary rounded-full animate-pulse"
-                            style={{ animationDelay: "0.2s" }}
-                          ></div>
-                          <div
-                            className="w-1 h-1 bg-primary rounded-full animate-pulse"
-                            style={{ animationDelay: "0.4s" }}
-                          ></div>
-                        </div>
-                      </div>
-                    </Card>
-                  </div>
+                  </>
                 )}
               </div>
-            )}
-          </ScrollArea>
-
-          {/* Message Input Form */}
-          <div className="p-6 border-t border-border">
-            <Card className="p-4 max-w-4xl mx-auto">
-              <div className="flex items-center gap-3">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button 
-                      variant="ghost" 
-                      size="icon" 
-                      className="flex-shrink-0"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={isUploading}
-                    >
-                      <Paperclip className="h-4 w-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    {isUploading ? "Uploading..." : "Upload PDF"}
-                  </TooltipContent>
-                </Tooltip>
-
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".pdf"
-                  onChange={handleFileUpload}
-                  className="hidden"
-                />
-
-                <Input
-                  value={inputValue}
-                  onChange={(e) => setInputValue(e.target.value)}
-                  onKeyPress={handleKeyPress}
-                  placeholder="Ask Sonia about your document or anything else..."
-                  className="flex-1 border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
-                  disabled={isLoading}
-                />
-
-                <Button
-                  onClick={handleSendMessage}
-                  disabled={!inputValue.trim() || isLoading}
-                  size="icon"
-                  className="flex-shrink-0 bg-primary hover:bg-primary/90 text-primary-foreground"
-                >
-                  <ArrowUp className="h-4 w-4" />
-                </Button>
-              </div>
-            </Card>
+            ))}
           </div>
-        </div>
+          <div className="sidebar-bottom">
+            <Emblem />
+            <p>
+              A little space
+              <br />
+              <em>for big ideas.</em>
+            </p>
+            <span className="mono">HISTORY LASTS FOR THIS VISIT</span>
+            <div className="account-user">
+              <span>Signed in as</span>
+              <strong>{session.user.email}</strong>
+              <button type="button" className="text-link" onClick={signOut}>
+                <LogOut size={14} /> Sign out
+              </button>
+            </div>
+            <Link href="/" className="sidebar-home">
+              Back to Sonia <ArrowUpRight size={14} />
+            </Link>
+          </div>
+        </aside>
+        <main className="chat-main">
+          <header className="chat-header">
+            <div>
+              <button
+                className="icon-button mobile-only"
+                aria-label="Open navigation"
+                aria-controls="chat-sidebar"
+                aria-expanded={sidebarOpen}
+                onClick={() => setSidebarOpen(true)}
+              >
+                <Menu size={20} />
+              </button>
+              <span className="room-label">The reading room</span>
+              <span className="header-slash">/</span>
+              <span className="header-title">
+                {current?.title ?? "A fresh perspective"}
+              </span>
+            </div>
+            <span className="mono header-edition">
+              SONIA / YOUR DOCUMENT COMPANION
+            </span>
+          </header>
+          <div className="chat-scroll">
+            {!messages.length ? (
+              <motion.div
+                className="chat-welcome"
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5 }}
+              >
+                <Emblem />
+                <p className="eyebrow">MAKE YOURSELF AT HOME.</p>
+                <h1>
+                  A little room
+                  <br />
+                  <em>for clarity.</em>
+                </h1>
+                <p>
+                  Bring the document. Ask the question.
+                  <br />
+                  Let’s find something worth knowing.
+                </p>
+                <button
+                  className="upload-invite"
+                  onClick={() => fileInput.current?.click()}
+                  disabled={!!pending}
+                >
+                  <span className="upload-icon">
+                    <FileText size={23} strokeWidth={1.2} />
+                  </span>
+                  <span>
+                    <strong>Put a document on the desk</strong>
+                    <small>Choose a PDF to get the conversation started</small>
+                  </span>
+                  <Plus size={20} />
+                </button>
+                <div className="prompt-suggestions">
+                  {suggestions.map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      onClick={() => {
+                        setInput(suggestion);
+                        textarea.current?.focus();
+                      }}
+                    >
+                      {suggestion}
+                      <ArrowUpRight size={13} />
+                    </button>
+                  ))}
+                </div>
+              </motion.div>
+            ) : (
+              <div className="message-list">
+                <AnimatePresence initial={false}>
+                  {messages.map((message) => (
+                    <motion.article
+                      key={message.id}
+                      className={`chat-message ${message.sender === "user" ? "from-user" : "from-sonia"} ${message.error ? "message-error" : ""}`}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.25 }}
+                    >
+                      <div className="message-label mono">
+                        {message.sender === "bot" && <Emblem />}
+                        {message.sender === "bot" ? "SONIA" : "YOU"}
+                      </div>
+                      <p>{message.content}</p>
+                      {message.notice && <p role="status" style={{ fontSize: 13, color: "var(--muted-foreground)" }}>{message.notice}</p>}
+                      {message.images?.length ? <DocumentImageGallery images={message.images} /> : null}
+                    </motion.article>
+                  ))}
+                </AnimatePresence>
+              </div>
+            )}
+            {pending?.id === currentId && (
+              <div className="pending-message" role="status">
+                <Emblem />
+                <span>
+                  {pending.kind === "upload"
+                    ? "Reading between the lines…"
+                    : "A little thinking in progress…"}
+                </span>
+                <span className="thinking-dots" aria-hidden="true">
+                  •••
+                </span>
+              </div>
+            )}
+            <div ref={end} />
+          </div>
+          <div className="composer-area">
+            {!!current?.documents.length && (
+              <div className="document-chips">
+                {current.documents.map((name, index) => (
+                  <span key={`${name}-${index}`}>
+                    <FileText size={12} />
+                    {name}
+                    <Check size={12} />
+                  </span>
+                ))}
+              </div>
+            )}
+            <form
+              className="chat-composer"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void ask();
+              }}
+            >
+              <label className="sr-only" htmlFor="question">
+                Ask Sonia about your document
+              </label>
+              <textarea
+                id="question"
+                ref={textarea}
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={onKeyDown}
+                placeholder="What’s on your mind?"
+                rows={2}
+                disabled={!!pending}
+              />
+              <div className="composer-controls">
+                <button
+                  type="button"
+                  className="attach-button"
+                  onClick={() => fileInput.current?.click()}
+                  disabled={!!pending}
+                >
+                  <Paperclip size={16} />
+                  <span>Add a PDF</span>
+                </button>
+                <span className="composer-hint mono">ENTER TO SEND</span>
+                <button
+                  className="send-button"
+                  type="submit"
+                  aria-label="Send message"
+                  disabled={!input.trim() || !!pending}
+                >
+                  <ArrowUp size={20} />
+                </button>
+              </div>
+            </form>
+            <input
+              ref={fileInput}
+              type="file"
+              accept=".pdf,application/pdf"
+              onChange={upload}
+              className="sr-only"
+              aria-label="Upload PDF"
+              tabIndex={-1}
+            />
+            {fileError && (
+              <p className="form-notice" role="alert">
+                {fileError}
+              </p>
+            )}
+            <p className="composer-disclaimer">
+              A thoughtful assistant, still learning. Always check important
+              details in your source.
+            </p>
+          </div>
+        </main>
       </div>
-    </TooltipProvider>
-  )
+    </MotionConfig>
+  );
 }
