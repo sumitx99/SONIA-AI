@@ -1,9 +1,23 @@
 // lib/supabase.ts
 import { createClient } from "@supabase/supabase-js";
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
-const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
+// Env values pasted into hosting dashboards often carry spaces or quotes; strip them.
+const clean = (value: string | undefined) => (value ?? "").trim().replace(/^["']|["']$/g, "").trim();
 
+function validUrl(value: string) {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" || parsed.protocol === "http:" ? value.replace(/\/+$/, "") : "";
+  } catch {
+    return "";
+  }
+}
+
+const url = validUrl(clean(process.env.NEXT_PUBLIC_SUPABASE_URL));
+const anonKey = clean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+
+// An invalid URL counts as missing, so a bad value shows the sign-in setup notice
+// instead of failing the build while pages are prerendered.
 export const supabaseConfigured = Boolean(url && anonKey);
 
 // The session lives in localStorage and the access token refreshes itself.

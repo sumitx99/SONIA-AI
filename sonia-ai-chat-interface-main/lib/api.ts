@@ -1,7 +1,9 @@
 // lib/api.ts
 import { supabase } from "@/lib/supabase";
 
-const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/$/, "");
+// Tolerates spaces, quotes and a trailing slash pasted into hosting env settings.
+const API_BASE_URL = ((process.env.NEXT_PUBLIC_API_URL ?? "").trim().replace(/^["']|["']$/g, "").trim()
+  || "http://localhost:8000").replace(/\/+$/, "");
 
 export class AuthRequiredError extends Error {}
 
