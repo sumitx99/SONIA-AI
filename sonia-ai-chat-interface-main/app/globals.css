@@ -1145,6 +1145,143 @@ h2 {
 .from-sonia > p {
   padding-left: 31px;
 }
+
+/* Sonia's answers: rendered Markdown */
+.markdown-body {
+  padding-left: 31px;
+  font-size: 13px;
+  line-height: 1.85;
+  overflow-wrap: anywhere;
+}
+.markdown-body > * + * {
+  margin-top: 14px;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  font-family: var(--font-editorial), Georgia, serif;
+  font-weight: 500;
+  line-height: 1.25;
+  color: var(--ink);
+}
+.markdown-body h1 { font-size: 24px; }
+.markdown-body h2 { font-size: 21px; margin-top: 24px; }
+.markdown-body h3 { font-size: 18px; margin-top: 20px; }
+.markdown-body h4 { font-size: 15px; }
+.markdown-body strong { font-weight: 600; color: var(--ink); }
+.markdown-body a { color: var(--orange); text-decoration: underline; text-underline-offset: 3px; }
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 22px;
+}
+.markdown-body ul { list-style: disc; }
+.markdown-body ol { list-style: decimal; }
+.markdown-body li + li { margin-top: 4px; }
+.markdown-body li::marker { color: #a58c63; }
+.markdown-body blockquote {
+  padding: 4px 0 4px 16px;
+  border-left: 2px solid #d2b68d;
+  color: #5c5245;
+}
+.markdown-body hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+.markdown-body code {
+  padding: 1px 5px;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 0.9em;
+  background: #ece5d6;
+  border-radius: 3px;
+}
+.markdown-body pre {
+  padding: 14px 16px;
+  overflow-x: auto;
+  background: #2b2620;
+  color: #f0eadc;
+  border-radius: 6px;
+}
+.markdown-body pre code {
+  padding: 0;
+  background: none;
+  color: inherit;
+}
+.markdown-body .katex { font-size: 1.05em; }
+.markdown-body .katex-display {
+  margin: 0;
+  padding: 4px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* Tables in answers */
+.md-table {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fcf8ef;
+}
+.md-table-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px 6px 14px;
+  border-bottom: 1px solid var(--line);
+  background: #f3ecdf;
+}
+.md-table-toolbar > .mono {
+  margin-right: auto;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  color: #8a7e6c;
+}
+.md-table-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 11px;
+  color: #5c5245;
+  border-radius: 5px;
+  transition: background 0.15s, color 0.15s;
+}
+.md-table-toolbar button:hover {
+  background: #e7dcc8;
+  color: var(--ink);
+}
+.md-table-toolbar button:focus-visible,
+.md-table-scroll:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.md-table-scroll {
+  overflow-x: auto;
+}
+.md-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.md-table th,
+.md-table td {
+  padding: 10px 14px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid #e6dccb;
+  overflow-wrap: normal;
+}
+.md-table th {
+  font-weight: 600;
+  color: var(--ink);
+  background: #f7f1e6;
+  white-space: nowrap;
+}
+.md-table tbody tr:last-child td { border-bottom: 0; }
+.md-table tbody tr:nth-child(even) td { background: #f8f3ea; }
+.md-table tbody tr:hover td { background: #f1e8d8; }
+.md-table td:first-child { min-width: 140px; }
 .message-error {
   color: #a13c2b;
 }
@@ -2142,8 +2279,12 @@ h2 {
   .message-list {
     padding: 25px 20px 0;
   }
-  .chat-message > p {
+  .chat-message > p,
+  .markdown-body {
     font-size: 12px;
+  }
+  .markdown-body {
+    padding-left: 0;
   }
   .from-user {
     margin-left: 30px;

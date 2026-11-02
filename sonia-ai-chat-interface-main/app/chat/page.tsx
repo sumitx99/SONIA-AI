@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { Brand, Emblem } from "@/components/brand";
 import { DocumentImageGallery } from "@/components/document-image";
+import { MarkdownMessage } from "@/components/markdown-message";
 import { sendMessage, uploadPDF, handleApiError, type ImageAttachment } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import { useSession } from "@/lib/use-session";
@@ -464,7 +465,9 @@ export default function SoniaChatInterface() {
                         {message.sender === "bot" && <Emblem />}
                         {message.sender === "bot" ? "SONIA" : "YOU"}
                       </div>
-                      <p>{message.content}</p>
+                      {message.sender === "bot" && !message.error
+                        ? <MarkdownMessage content={message.content} />
+                        : <p>{message.content}</p>}
                       {message.notice && <p role="status" style={{ fontSize: 13, color: "var(--muted-foreground)" }}>{message.notice}</p>}
                       {message.images?.length ? <DocumentImageGallery images={message.images} /> : null}
                     </motion.article>
