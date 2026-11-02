@@ -106,10 +106,11 @@ const components: Components = {
 /**
  * Renders an answer written in GitHub-flavoured Markdown with $…$ / $$…$$ maths.
  * Raw HTML in the text is dropped, never rendered (model output is untrusted).
+ * While `streaming`, a caret follows the last line of text.
  */
-export function MarkdownMessage({ content }: { content: string }) {
+export function MarkdownMessage({ content, streaming = false }: { content: string; streaming?: boolean }) {
   return (
-    <div className="markdown-body">
+    <div className={`markdown-body ${streaming ? "is-streaming" : ""}`} aria-busy={streaming}>
       <ReactMarkdown
         skipHtml
         remarkPlugins={[remarkGfm, remarkMath]}

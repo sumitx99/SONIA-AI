@@ -123,6 +123,76 @@ export const sendMessage = async (query: string, documentIds?: number[]): Promis
   }
 };
 
+export interface StreamHandlers {
+  /** Images and status, sent once before the text. */
+  onMeta?: (meta: Omit<ChatResponse, "query" | "answer">) => void;
+  /** Each new piece of the answer, in order. */
+  onDelta: (text: string) => void;
+}
+
+/**
+ * Streams an answer from /chat/stream (server-sent events). Resolves when the answer is
+ * complete; rejects if nothing usable arrived. `cutOff` is true when the stream broke
+ * part-way, after some text had already been shown.
+ */
+export const streamMessage = async (
+  query: string, documentIds: number[] | undefined, handlers: StreamHandlers,
+): Promise<{ cutOff: boolean }> => {
+  const formData = new FormData();
+  formData.append("query", query);
+  if (documentIds !== undefined) {
+    formData.append("scope_documents", "true");
+    documentIds.forEach((id) => formData.append("document_ids", String(id)));
+  }
+  const response = await apiFetch("/chat/stream", { method: "POST", body: formData });
+
+  // An API deployed before streaming existed: fall back to the one-shot endpoint.
+  if (response.status === 404) {
+    const { answer, ...meta } = await sendMessage(query, documentIds);
+    handlers.onMeta?.(meta);
+    handlers.onDelta(answer);
+    return { cutOff: false };
+  }
+  if (!response.ok || !response.body) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+  }
+
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = "";
+  let wroteText = false;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += value;
+    // Events are separated by a blank line; keep a trailing partial event for the next read.
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+    for (const frame of frames) {
+      let event = "message";
+      let data = "";
+      for (const line of frame.split("\n")) {
+        if (line.startsWith("event:")) event = line.slice(6).trim();
+        else if (line.startsWith("data:")) data += line.slice(5).trim();
+      }
+      if (!data) continue;
+      const payload = JSON.parse(data);
+      if (event === "meta") handlers.onMeta?.(payload);
+      else if (event === "delta") {
+        wroteText = true;
+        handlers.onDelta(payload.text);
+      } else if (event === "done") return { cutOff: false };
+      else if (event === "error") {
+        if (!wroteText) throw new Error(payload.detail);
+        return { cutOff: true };
+      }
+    }
+  }
+  // The connection closed without a "done" event.
+  if (!wroteText) throw new Error("The answer didn't arrive");
+  return { cutOff: true };
+};
+
 // Renew expired image links without asking the model to generate another answer.
 export const refreshDocumentImage = async (documentId: number, imageId: string): Promise<ImageAttachment> => {
   const response = await apiFetch(`/documents/${documentId}/images/${encodeURIComponent(imageId)}`);

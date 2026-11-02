@@ -1,6 +1,7 @@
 """API contract tests; parsing, model calls, DB and R2 are external-service fakes."""
 
 import importlib
+import json
 import sys
 import types
 import unittest
@@ -97,6 +98,41 @@ class ImageAPITests(unittest.TestCase):
         self.assertEqual(text_search.call_args.kwargs["document_ids"], [7])
         _, text_search, _, _, _ = self.chat("Summarize", {"document_ids": [7, 8], "scope_documents": "true"})
         self.assertEqual(text_search.call_args.kwargs["document_ids"], [7])
+
+    def stream(self, query, pieces, data=None):
+        with patch.object(backend, "get_embedding", return_value=[0.1]), \
+             patch.object(backend, "get_reranked_context", return_value="Document text"), \
+             patch.object(backend, "stream_llm_response", return_value=iter(pieces)) as llm:
+            response = self.client.post("/chat/stream", data={"query": query, **(data or {})})
+        events = []
+        for frame in response.text.strip().split("\n\n"):
+            lines = dict(line.split(": ", 1) for line in frame.splitlines())
+            events.append((lines["event"], json.loads(lines["data"])))
+        return response, events, llm
+
+    def test_stream_sends_meta_then_text_pieces_then_done(self):
+        response, events, llm = self.stream("Summarize", ["Self-", "attention ", "**works**."],
+                                            {"document_ids": [7], "scope_documents": "true"})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.headers["content-type"].startswith("text/event-stream"))
+        self.assertEqual([name for name, _ in events], ["meta", "delta", "delta", "delta", "done"])
+        self.assertEqual(events[0][1]["image_status"], "not_requested")
+        self.assertEqual("".join(data["text"] for name, data in events if name == "delta"),
+                         "Self-attention **works**.")
+        self.assertEqual(llm.call_args.args, ("Summarize", "Document text"))
+
+    def test_stream_reports_an_answer_cut_off_part_way(self):
+        def broken():
+            yield "Partial "
+            raise RuntimeError("connection reset")
+        with self.assertLogs("app.app", level="ERROR"):
+            _, events, _ = self.stream("Summarize", broken())
+        self.assertEqual([name for name, _ in events], ["meta", "delta", "error"])
+        self.assertIn("interrupted", events[-1][1]["detail"])
+
+    def test_stream_requires_sign_in(self):
+        backend.app.dependency_overrides.clear()
+        self.assertEqual(self.client.post("/chat/stream", data={"query": "hi"}).status_code, 401)
 
     def test_requests_without_a_token_are_rejected(self):
         backend.app.dependency_overrides.clear()

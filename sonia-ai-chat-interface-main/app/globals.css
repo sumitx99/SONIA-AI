@@ -1215,6 +1215,26 @@ h2 {
   overflow-y: hidden;
 }
 
+/* A caret after the last line while an answer is still arriving */
+.markdown-body.is-streaming > p:last-child::after,
+.markdown-body.is-streaming > ul:last-child > li:last-child::after,
+.markdown-body.is-streaming > ol:last-child > li:last-child::after {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 1.05em;
+  margin-left: 3px;
+  vertical-align: -0.15em;
+  background: var(--orange);
+  animation: answer-caret 1s steps(2, start) infinite;
+}
+@keyframes answer-caret {
+  to { visibility: hidden; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .markdown-body.is-streaming > :last-child::after { animation: none; }
+}
+
 /* Tables in answers */
 .md-table {
   overflow: hidden;

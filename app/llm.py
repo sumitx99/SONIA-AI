@@ -1,9 +1,15 @@
+import json
 import os
+
 import requests
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 # Google retires model versions; override in .env instead of editing code.
 CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", "gemini-3.5-flash")
+# How long the model "thinks" before writing. "minimal" cuts time-to-first-word from ~4 s to
+# ~1 s, which is plenty for answering from retrieved passages; "low"/"high" think longer.
+# Leave empty for the model's default (or for models without thinking levels).
+THINKING_LEVEL = os.getenv("GEMINI_THINKING_LEVEL", "minimal").strip()
 
 # The chat UI renders GitHub-flavoured Markdown (tables, lists, code) and KaTeX math, and
 # never renders raw HTML, so answers must be Markdown.
@@ -33,27 +39,52 @@ Formatting (the answer is rendered as GitHub-flavoured Markdown):
 - Never output raw HTML."""
 
 
-def get_llm_response(query: str, context: str):
-    """
-    Use Google Gemini to generate an answer with context, a defined persona, and safety guardrails.
-    """
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{CHAT_MODEL}:generateContent?key={GOOGLE_API_KEY}"
-    
-    headers = {"Content-Type": "application/json"}
-
-    data = {
+def _request_body(query: str, context: str) -> dict:
+    body = {
         "system_instruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
         "contents": [{"role": "user", "parts": [{"text": (
             f"Provided Document Context:\n{context or '(none)'}\n\n---\n\nUser's Question: {query}"
         )}]}],
     }
+    if THINKING_LEVEL:
+        body["generationConfig"] = {"thinkingConfig": {"thinkingLevel": THINKING_LEVEL}}
+    return body
 
-    response = requests.post(url, headers=headers, json=data)
+
+def _text_of(payload: dict) -> str:
+    """The answer text in one Gemini response (or stream chunk), skipping any thought parts."""
+    candidates = payload.get("candidates") or []
+    if not candidates:
+        return ""
+    parts = (candidates[0].get("content") or {}).get("parts") or []
+    return "".join(part.get("text", "") for part in parts if not part.get("thought"))
+
+
+def get_llm_response(query: str, context: str):
+    """
+    Use Google Gemini to generate an answer with context, a defined persona, and safety guardrails.
+    """
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{CHAT_MODEL}:generateContent?key={GOOGLE_API_KEY}"
+    response = requests.post(url, json=_request_body(query, context), timeout=120)
     response.raise_for_status()
-    
-    # It's good practice to check if the response was blocked or candidates are missing
-    if "candidates" not in response.json() or not response.json()["candidates"]:
-        return "I am sorry, but I was unable to generate a response for that query."
+    answer = _text_of(response.json()).strip()
+    # A blocked or empty response has no candidates.
+    return answer or "I am sorry, but I was unable to generate a response for that query."
 
-    answer = response.json()["candidates"][0]["content"]["parts"][0]["text"]
-    return answer.strip()
+
+def stream_llm_response(query: str, context: str):
+    """Yields the answer in pieces as Gemini writes it (server-sent events from the API)."""
+    url = (f"https://generativelanguage.googleapis.com/v1beta/models/{CHAT_MODEL}"
+           f":streamGenerateContent?alt=sse&key={GOOGLE_API_KEY}")
+    with requests.post(url, json=_request_body(query, context), stream=True, timeout=120) as response:
+        response.raise_for_status()
+        wrote_any = False
+        for line in response.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data:"):
+                continue
+            text = _text_of(json.loads(line[5:]))
+            if text:
+                wrote_any = True
+                yield text
+        if not wrote_any:
+            yield "I am sorry, but I was unable to generate a response for that query."

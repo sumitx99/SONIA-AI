@@ -1,12 +1,13 @@
 # app/app.py
 
 import asyncio
+import json
 import logging
 import os
 from fastapi import Depends, FastAPI, UploadFile, File, Form, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import RedirectResponse, Response
+from fastapi.concurrency import iterate_in_threadpool, run_in_threadpool
+from fastapi.responses import RedirectResponse, Response, StreamingResponse
 from requests.exceptions import HTTPError
 
 # --- MODIFIED IMPORTS ---
@@ -14,7 +15,7 @@ from app.auth import current_user
 from app.db import (insert_file, insert_embeddings, get_document_source, close_pool,
                     set_document_source_key, delete_document, owned_document_ids)
 from app.embeddings import get_embedding, get_embeddings_batch
-from app.llm import get_llm_response
+from app.llm import get_llm_response, stream_llm_response
 from app.pdf_utils import chunk_text
 from app.docling_utils import docling_enabled, process_pdf_with_docling
 from app.retriever import get_reranked_context, rank_contexts
@@ -135,73 +136,119 @@ async def upload_pdf(file: UploadFile = File(...), chat_id: str | None = Form(No
         raise HTTPException(status_code=500, detail=f"An internal server error occurred: {str(e)}")
 
 
-# Image URLs come from retrieved metadata; the language model never invents them.
+async def _answer_context(query, document_ids, scope_documents, include_images, user_id):
+    """Retrieves the passages (and, when asked, images) an answer is grounded in.
+
+    Image URLs come from retrieved metadata; the language model never invents them.
+    Returns the prompt context and the image fields of the response.
+    """
+    query_embedding = await asyncio.to_thread(get_embedding, query)
+    logger.info("Starting advanced retrieval with re-ranking...")
+    requested = (document_ids or []) if scope_documents else document_ids
+    # Only the signed-in user's documents are ever searched (None = all of theirs).
+    scope = await owned_document_ids(user_id, requested)
+    context = await get_reranked_context(query, query_embedding, document_ids=scope)
+
+    images = []
+    image_status = "not_requested"
+    image_notice = None
+    if include_images or wants_images(query):
+        image_status = "disabled"
+        image_notice = "Image storage is not configured on this server."
+        try:
+            storage = R2ImageStorage.from_env()
+            if storage:
+                page_number, image_number = requested_image_location(query)
+                candidates = await find_document_images(query_embedding, document_ids=scope,
+                                                         page_number=page_number, image_number=image_number)
+                selected = await asyncio.to_thread(rank_contexts, query, candidates,
+                                                   text_key="search_text", limit=5)
+                images = image_attachments(selected, storage)
+                image_status = "ready" if images else "not_found"
+                image_notice = None if images else "No indexed image matched the requested document or location."
+                if selected:
+                    image_context = "\n\n".join(
+                        f"Image ID: {image['image_id']}; document {image['document_id']}; "
+                        f"page {image['page_number']}; image {image['image_number']}\n"
+                        + image["search_text"] for image in selected
+                    )
+                    context += "\n\nImage source locations and surrounding text:\n" + image_context
+        except Exception:
+            logger.exception("Image retrieval failed")
+            image_status = "failed"
+            image_notice = "Image retrieval is temporarily unavailable."
+
+        context += (
+            "\n\nImage retrieval status: " + image_status + ". " + (image_notice or "")
+            + "\nOnly the image locations and nearby text are available; the image pixels "
+            "have not been analyzed. Do not invent visual details or image URLs. "
+            "The application displays retrieved images separately. "
+            "If no image was found, say so rather than claiming to display one."
+        )
+
+    if not context:
+        logger.warning("No relevant context found after re-ranking for the query.")
+    else:
+        logger.info("Retrieved and re-ranked context successfully.")
+    return context, {"images": images, "image_status": image_status, "image_notice": image_notice}
+
+
 @app.post("/chat", tags=["Chat"])
 async def chat(query: str = Form(...), document_ids: list[int] | None = Form(None),
                scope_documents: bool = Form(False), include_images: bool = Form(False),
                user_id: str = Depends(current_user)):
     try:
         logger.info(f"Received query: '{query}'")
-        query_embedding = await asyncio.to_thread(get_embedding, query)
-        logger.info("Starting advanced retrieval with re-ranking...")
-        requested = (document_ids or []) if scope_documents else document_ids
-        # Only the signed-in user's documents are ever searched (None = all of theirs).
-        scope = await owned_document_ids(user_id, requested)
-        context = await get_reranked_context(query, query_embedding, document_ids=scope)
-
-        images = []
-        image_status = "not_requested"
-        image_notice = None
-        if include_images or wants_images(query):
-            image_status = "disabled"
-            image_notice = "Image storage is not configured on this server."
-            try:
-                storage = R2ImageStorage.from_env()
-                if storage:
-                    page_number, image_number = requested_image_location(query)
-                    candidates = await find_document_images(query_embedding, document_ids=scope,
-                                                             page_number=page_number, image_number=image_number)
-                    selected = await asyncio.to_thread(rank_contexts, query, candidates,
-                                                       text_key="search_text", limit=5)
-                    images = image_attachments(selected, storage)
-                    image_status = "ready" if images else "not_found"
-                    image_notice = None if images else "No indexed image matched the requested document or location."
-                    if selected:
-                        image_context = "\n\n".join(
-                            f"Image ID: {image['image_id']}; document {image['document_id']}; "
-                            f"page {image['page_number']}; image {image['image_number']}\n"
-                            + image["search_text"] for image in selected
-                        )
-                        context += "\n\nImage source locations and surrounding text:\n" + image_context
-            except Exception:
-                logger.exception("Image retrieval failed")
-                image_status = "failed"
-                image_notice = "Image retrieval is temporarily unavailable."
-
-            context += (
-                "\n\nImage retrieval status: " + image_status + ". " + (image_notice or "")
-                + "\nOnly the image locations and nearby text are available; the image pixels "
-                "have not been analyzed. Do not invent visual details or image URLs. "
-                "The application displays retrieved images separately. "
-                "If no image was found, say so rather than claiming to display one."
-            )
-        
-        if not context:
-            logger.warning("No relevant context found after re-ranking for the query.")
-        else:
-            logger.info("Retrieved and re-ranked context successfully.")
-
+        context, meta = await _answer_context(query, document_ids, scope_documents, include_images, user_id)
         answer = await asyncio.to_thread(get_llm_response, query, context)
         logger.info("Generated LLM response.")
-        return {"query": query, "answer": answer, "images": images,
-                "image_status": image_status, "image_notice": image_notice}
-        
+        return {"query": query, "answer": answer, **meta}
+
     except HTTPError as e:
         logger.error(f"HTTPError during LLM call: {e}")
         raise HTTPException(status_code=503, detail=f"The AI service is temporarily unavailable: {e.response.text}")
     except Exception as e:
         logger.error(f"An unexpected error occurred during chat: {e}")
         raise HTTPException(status_code=500, detail=f"An internal server error occurred: {str(e)}")
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+@app.post("/chat/stream", tags=["Chat"])
+async def chat_stream(query: str = Form(...), document_ids: list[int] | None = Form(None),
+                      scope_documents: bool = Form(False), include_images: bool = Form(False),
+                      user_id: str = Depends(current_user)):
+    """Like /chat, but streams the answer as server-sent events while Gemini writes it.
+
+    Events: `meta` (images and status, once), `delta` ({"text"}, repeatedly), then `done`,
+    or `error` ({"detail"}) if the answer breaks off part-way.
+    """
+    try:
+        logger.info(f"Received streaming query: '{query}'")
+        # Retrieval errors happen before any bytes are sent, so they keep normal status codes.
+        context, meta = await _answer_context(query, document_ids, scope_documents, include_images, user_id)
+    except HTTPError as e:
+        logger.error(f"HTTPError during retrieval: {e}")
+        raise HTTPException(status_code=503, detail=f"The AI service is temporarily unavailable: {e.response.text}")
+    except Exception as e:
+        logger.error(f"An unexpected error occurred during chat: {e}")
+        raise HTTPException(status_code=500, detail=f"An internal server error occurred: {str(e)}")
+
+    async def events():
+        yield _sse("meta", meta)
+        try:
+            async for piece in iterate_in_threadpool(stream_llm_response(query, context)):
+                yield _sse("delta", {"text": piece})
+            yield _sse("done", {})
+        except Exception:
+            logger.exception("Streaming the answer failed")
+            yield _sse("error", {"detail": "The answer was interrupted. Please try again."})
+
+    # No buffering by proxies, so each piece reaches the browser as soon as it is written.
+    return StreamingResponse(events(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.get("/documents/{document_id}/source", tags=["Document Handling"])

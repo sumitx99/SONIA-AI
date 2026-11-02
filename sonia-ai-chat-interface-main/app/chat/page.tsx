@@ -27,7 +27,7 @@ import {
 import { Brand, Emblem } from "@/components/brand";
 import { DocumentImageGallery } from "@/components/document-image";
 import { MarkdownMessage } from "@/components/markdown-message";
-import { sendMessage, uploadPDF, handleApiError, type ImageAttachment } from "@/lib/api";
+import { streamMessage, uploadPDF, handleApiError, type ImageAttachment } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import { useSession } from "@/lib/use-session";
 
@@ -38,6 +38,8 @@ interface Message {
   error?: boolean;
   images?: ImageAttachment[];
   notice?: string | null;
+  /** True while the answer is still arriving. */
+  streaming?: boolean;
 }
 interface ChatSession {
   id: string;
@@ -126,22 +128,42 @@ export default function SoniaChatInterface() {
       );
     setInput("");
     setPending({ id, kind: "answer" });
+    const answerId = crypto.randomUUID();
+    let meta: { images?: ImageAttachment[]; image_notice?: string | null } = {};
+    let text = "";
+    const update = (changes: Partial<Message>) =>
+      setSessions((previous) => previous.map((session) => session.id === id
+        ? { ...session, messages: session.messages.map((m) => (m.id === answerId ? { ...m, ...changes } : m)) }
+        : session));
     try {
-      const response = await sendMessage(query, current?.documentIds ?? []);
-      append(id, {
-        id: crypto.randomUUID(),
-        content: response.answer,
-        sender: "bot",
-        images: response.images,
-        notice: response.image_notice,
+      const { cutOff } = await streamMessage(query, current?.documentIds ?? [], {
+        onMeta: (received) => { meta = received; },
+        onDelta: (piece) => {
+          if (!text) {
+            // The first words replace the "thinking" indicator with the answer itself.
+            setPending(null);
+            append(id, { id: answerId, content: "", sender: "bot", streaming: true,
+                         images: meta.images, notice: meta.image_notice });
+          }
+          text += piece;
+          update({ content: text });
+        },
+      });
+      update({
+        streaming: false,
+        ...(cutOff && { notice: "The answer was cut off part-way. Ask again to get the rest." }),
       });
     } catch (error) {
-      append(id, {
-        id: crypto.randomUUID(),
-        content: `I couldn’t get an answer. ${handleApiError(error)}. Please check the connection and try again.`,
-        sender: "bot",
-        error: true,
-      });
+      if (text) {
+        update({ streaming: false, notice: "The answer was cut off part-way. Ask again to get the rest." });
+      } else {
+        append(id, {
+          id: crypto.randomUUID(),
+          content: `I couldn’t get an answer. ${handleApiError(error)}. Please check the connection and try again.`,
+          sender: "bot",
+          error: true,
+        });
+      }
     } finally {
       busy.current = false;
       setPending(null);
@@ -466,7 +488,7 @@ export default function SoniaChatInterface() {
                         {message.sender === "bot" ? "SONIA" : "YOU"}
                       </div>
                       {message.sender === "bot" && !message.error
-                        ? <MarkdownMessage content={message.content} />
+                        ? <MarkdownMessage content={message.content} streaming={message.streaming} />
                         : <p>{message.content}</p>}
                       {message.notice && <p role="status" style={{ fontSize: 13, color: "var(--muted-foreground)" }}>{message.notice}</p>}
                       {message.images?.length ? <DocumentImageGallery images={message.images} /> : null}

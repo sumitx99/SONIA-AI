@@ -36,6 +36,8 @@ services:
         value: gemini-3.5-flash
       - key: GEMINI_EMBEDDING_MODEL
         value: gemini-embedding-001
+      - key: GEMINI_THINKING_LEVEL
+        value: minimal
       - key: SUPABASE_URL
         sync: false
       - key: R2_ENDPOINT_URL
