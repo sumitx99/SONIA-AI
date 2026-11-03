@@ -22,6 +22,12 @@ URL_CONTEXT = os.getenv("GEMINI_URL_CONTEXT", "true").strip().lower() != "false"
 WEB_SEARCH = os.getenv("GEMINI_WEB_SEARCH", "true").strip().lower() != "false"
 SEARCH_PAUSE = 600
 _search_paused_until = 0.0
+# Backup answers when Gemini is out of quota or down: Groq's OpenAI-compatible API, tried
+# model by model (each has its own free limits). Without GROQ_API_KEY there is no backup.
+GROQ_API = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+GROQ_MODELS = [model for model in (os.getenv("GROQ_MODEL", "openai/gpt-oss-120b").strip(),
+                                   os.getenv("GROQ_FALLBACK_MODEL", "openai/gpt-oss-20b").strip()) if model]
 
 # The chat UI renders GitHub-flavoured Markdown (tables, lists, code) and KaTeX math, and
 # never renders raw HTML, so answers must be Markdown.
@@ -193,6 +199,8 @@ def stream_gemini_parts(contents: list, function_declarations: list):
         response = _post_stream(contents, function_declarations, False)
     with response:
         response.raise_for_status()
+        # Event streams are UTF-8 but often name no charset, which requests reads as Latin-1.
+        response.encoding = "utf-8"
         for line in response.iter_lines(decode_unicode=True):
             if not line or not line.startswith("data:"):
                 continue
@@ -202,3 +210,69 @@ def stream_gemini_parts(contents: list, function_declarations: list):
             yield from (candidates[0].get("content") or {}).get("parts") or []
             if candidates[0].get("groundingMetadata"):
                 yield {"groundingMetadata": candidates[0]["groundingMetadata"]}
+
+
+# Added for backup answers: Groq models get the document context but none of Gemini's tools.
+BACKUP_INSTRUCTION = """
+
+Right now you can't read web pages, search the web, or use the user's connected tools. If the
+question needs them, answer from the Provided Document Context and your own knowledge, and
+say briefly what you couldn't check."""
+
+
+class BackupUnavailable(RuntimeError):
+    """No backup model could answer (none configured, or all out of quota or down)."""
+
+
+def gemini_unavailable(error: Exception) -> bool:
+    """Whether a Gemini failure is temporary (quota, overload, network) rather than a bad request."""
+    if isinstance(error, requests.HTTPError):
+        status = error.response.status_code if error.response is not None else 503
+        return status == 429 or status >= 500
+    return isinstance(error, (requests.ConnectionError, requests.Timeout))
+
+
+def backup_configured() -> bool:
+    return bool(GROQ_API_KEY and GROQ_MODELS)
+
+
+def stream_backup_answer(query: str, context: str):
+    """Answers with the first Groq model that accepts the request.
+
+    Yields ("model", id) once, then ("text", piece) as the answer streams. Raises
+    BackupUnavailable when every model is out of quota or unreachable.
+    """
+    messages = [
+        {"role": "system", "content": SYSTEM_INSTRUCTION + CHART_INSTRUCTION + BACKUP_INSTRUCTION},
+        {"role": "user", "content": user_turn(query, context)["parts"][0]["text"]},
+    ]
+    for model in GROQ_MODELS:
+        try:
+            response = requests.post(GROQ_API, headers={"Authorization": f"Bearer {GROQ_API_KEY}"}, json={
+                # gpt-oss models reason before answering; "low" keeps that short (and within free limits).
+                "model": model, "messages": messages, "stream": True, "reasoning_effort": "low",
+            }, stream=True, timeout=120)
+        except (requests.ConnectionError, requests.Timeout):
+            logger.warning("Backup model %s unreachable", model)
+            continue
+        if response.status_code == 429 or response.status_code >= 500:
+            logger.warning("Backup model %s unavailable (HTTP %s)", model, response.status_code)
+            response.close()
+            continue
+        with response:
+            response.raise_for_status()
+            response.encoding = "utf-8"  # see stream_gemini_parts
+            yield "model", model
+            for line in response.iter_lines(decode_unicode=True):
+                if not line or not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if payload == "[DONE]":
+                    break
+                choices = json.loads(payload).get("choices") or []
+                # Only the answer: the model's reasoning arrives in a separate "reasoning" field.
+                piece = (choices[0].get("delta") or {}).get("content") if choices else None
+                if piece:
+                    yield "text", piece
+        return
+    raise BackupUnavailable("No backup model could answer")

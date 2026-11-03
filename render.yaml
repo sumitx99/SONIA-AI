@@ -42,6 +42,9 @@ services:
         value: gemini-3.5-flash
       - key: GEMINI_EMBEDDING_MODEL
         value: gemini-embedding-001
+      # Backup answers when Gemini is out of quota (Groq); optional.
+      - key: GROQ_API_KEY
+        sync: false
       - key: GEMINI_THINKING_LEVEL
         value: minimal
       - key: SUPABASE_URL

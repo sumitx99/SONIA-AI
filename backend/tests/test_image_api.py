@@ -5,6 +5,8 @@ import json
 import sys
 import types
 import unittest
+
+import requests
 from unittest.mock import AsyncMock, Mock, patch
 
 from fastapi.testclient import TestClient
@@ -160,6 +162,39 @@ class ImageAPITests(unittest.TestCase):
             _, events, _ = self.stream("Summarize", broken())
         self.assertEqual([name for name, _ in events], ["meta", "delta", "error"])
         self.assertIn("interrupted", events[-1][1]["detail"])
+
+    @staticmethod
+    def gemini_fails(status, after=()):
+        def parts():
+            yield from after
+            raise requests.HTTPError(response=Mock(status_code=status))
+        return parts()
+
+    def test_stream_falls_back_to_a_backup_model_when_gemini_is_out_of_quota(self):
+        backup = Mock(return_value=iter([("model", "openai/gpt-oss-120b"), ("text", "Backup "), ("text", "answer.")]))
+        with patch.object(chat_api, "backup_configured", return_value=True), \
+             patch.object(chat_api, "stream_backup_answer", backup), \
+             self.assertLogs("app.api.chat", level="WARNING"):
+            _, events, _ = self.stream("Summarize", self.gemini_fails(429))
+        self.assertEqual([name for name, _ in events], ["meta", "notice", "delta", "delta", "done"])
+        self.assertIn("gpt-oss-120b", events[1][1]["text"])
+        self.assertEqual(backup.call_args.args, ("Summarize", "Document text"))
+
+    def test_an_answer_cut_off_part_way_is_not_restarted_by_the_backup(self):
+        backup = Mock()
+        with patch.object(chat_api, "backup_configured", return_value=True), \
+             patch.object(chat_api, "stream_backup_answer", backup), \
+             self.assertLogs("app.api.chat", level="ERROR"):
+            _, events, _ = self.stream("Summarize", self.gemini_fails(503, after=[{"text": "Partial "}]))
+        self.assertEqual([name for name, _ in events], ["meta", "delta", "error"])
+        backup.assert_not_called()
+
+    def test_quota_errors_say_so_instead_of_blaming_the_connection(self):
+        with patch.object(chat_api, "backup_configured", return_value=False), \
+             self.assertLogs("app.api.chat", level="ERROR"):
+            _, events, _ = self.stream("Summarize", self.gemini_fails(429))
+        self.assertEqual([name for name, _ in events], ["meta", "error"])
+        self.assertIn("quota", events[-1][1]["detail"])
 
     def test_stream_requires_sign_in(self):
         main.app.dependency_overrides.clear()

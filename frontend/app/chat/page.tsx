@@ -154,6 +154,10 @@ export default function SoniaChatInterface() {
           update({ tool_calls: toolCalls });
         },
         onSources: (sources) => update({ sources }),
+        onNotice: (text) => {
+          start();
+          update({ notice: [meta.image_notice, text].filter(Boolean).join(" ") });
+        },
       });
       update({
         streaming: false,
@@ -165,7 +169,9 @@ export default function SoniaChatInterface() {
       } else {
         append(id, {
           id: crypto.randomUUID(),
-          content: `I couldn’t get an answer. ${handleApiError(error)}. Please check the connection and try again.`,
+          // The server's reason is already a sentence; only a failed request suggests the network.
+          content: `I couldn’t get an answer. ${handleApiError(error).replace(/([^.!?])$/, "$1.")}${
+            error instanceof TypeError ? " Please check your connection and try again." : ""}`,
           sender: "bot",
           error: true,
         });

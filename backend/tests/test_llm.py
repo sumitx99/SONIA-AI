@@ -79,5 +79,58 @@ class WebToolTests(unittest.TestCase):
         self.assertNotIn("toolConfig", body)
 
 
+
+def groq_stream(*pieces):
+    chunks = [{"choices": [{"delta": {"reasoning": "thinking..."}}]}]
+    chunks += [{"choices": [{"delta": {"content": piece}}]} for piece in pieces]
+    reply = response(200, chunks)
+    reply.iter_lines.return_value += ["data: [DONE]"]
+    return reply
+
+
+class BackupModelTests(unittest.TestCase):
+    def answer(self, *replies):
+        with patch.object(llm, "GROQ_API_KEY", "groq-key"), \
+             patch.object(llm, "GROQ_MODELS", ["big", "small"]), \
+             patch.object(llm.requests, "post", side_effect=list(replies)) as post:
+            events = list(llm.stream_backup_answer("What is attention?", "Document text"))
+        return events, [call.kwargs["json"] for call in post.call_args_list], post
+
+    def test_streams_only_the_answer_from_the_first_model(self):
+        events, [body], post = self.answer(groq_stream("Attention ", "weighs tokens."))
+        self.assertEqual(events, [("model", "big"), ("text", "Attention "), ("text", "weighs tokens.")])
+        self.assertEqual(body["model"], "big")
+        self.assertEqual(post.call_args.kwargs["headers"], {"Authorization": "Bearer groq-key"})
+        self.assertIn("Document text", body["messages"][1]["content"])
+        self.assertIn("can't read web pages", body["messages"][0]["content"])
+
+    def test_streams_are_read_as_utf8(self):
+        reply = groq_stream("28.4\u202fBLEU")
+        self.answer(reply)
+        self.assertEqual(reply.encoding, "utf-8")
+        gemini = response(200, [CHUNK])
+        with patch.object(llm.requests, "post", return_value=gemini):
+            list(llm.stream_gemini_parts([], []))
+        self.assertEqual(gemini.encoding, "utf-8")
+
+    def test_a_model_out_of_quota_hands_over_to_the_next(self):
+        with self.assertLogs("app.services.llm", level="WARNING"):
+            events, bodies, _ = self.answer(response(429), groq_stream("Hi"))
+        self.assertEqual([body["model"] for body in bodies], ["big", "small"])
+        self.assertEqual(events[0], ("model", "small"))
+
+    def test_no_model_left_raises(self):
+        with self.assertLogs("app.services.llm", level="WARNING"), self.assertRaises(llm.BackupUnavailable):
+            self.answer(response(429), response(503))
+
+    def test_only_temporary_gemini_failures_count_as_unavailable(self):
+        error = lambda status: llm.requests.HTTPError(response=Mock(status_code=status))
+        self.assertTrue(llm.gemini_unavailable(error(429)))
+        self.assertTrue(llm.gemini_unavailable(error(503)))
+        self.assertTrue(llm.gemini_unavailable(llm.requests.Timeout()))
+        self.assertFalse(llm.gemini_unavailable(error(400)))
+        self.assertFalse(llm.gemini_unavailable(ValueError("bug")))
+
+
 if __name__ == "__main__":
     unittest.main()
