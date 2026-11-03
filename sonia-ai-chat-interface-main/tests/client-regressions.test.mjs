@@ -84,3 +84,41 @@ test('an oversized document is rejected before any network request', async (t) =
   await assert.rejects(client().uploadPDF({ size: 26 * 1024 * 1024 }), /25 MB/);
   assert.equal(called, false);
 });
+
+const charts = loadTypeScript('../lib/chart-spec.ts');
+
+test('a plotly block becomes a chart spec and picks the smallest Plotly build', () => {
+  const bar = charts.parseChartSpec(JSON.stringify({
+    data: [{ type: 'bar', name: 'BLEU', x: ['ByteNet', 'Transformer'], y: [23.75, 28.4] }],
+    layout: { title: { text: 'BLEU (EN→DE)' }, yaxis: { title: 'BLEU' } },
+  }));
+  assert.equal(bar.bundle, 'cartesian');
+  assert.equal(bar.title, 'BLEU (EN→DE)');
+  assert.deepEqual(charts.chartTables(bar), [{ name: 'BLEU', columns: ['x', 'y'], rows: [['ByteNet', 23.75], ['Transformer', 28.4]] }]);
+  const map = charts.parseChartSpec(JSON.stringify({ data: [{ type: 'choropleth', locations: ['India'], z: [6.8] }] }));
+  assert.equal(map.bundle, 'geo');
+  const street = charts.parseChartSpec(JSON.stringify({ data: [{ type: 'scattermap', lat: [28.6], lon: [77.2] }] }));
+  assert.equal(street.bundle, 'map');
+  assert.equal(charts.parseChartSpec('{"data":[{"y":[1,2,3]}]}').data[0].type, 'scatter');
+});
+
+test('chart JSON from the model cannot load outside content or overload the page', () => {
+  const spec = charts.parseChartSpec(JSON.stringify({
+    data: [{ type: 'choroplethmap', geojson: 'https://evil.example/shapes.json', locations: ['a'], z: [1] }],
+  }));
+  assert.match(spec.error, /aren't supported/);
+  const cleaned = charts.parseChartSpec(JSON.stringify({
+    data: [{ type: 'scattermap', lat: [1], lon: [2], geojson: 'https://evil.example/x.json' }],
+    layout: { images: [{ source: 'https://evil.example/pixel.png' }], template: { layout: {} },
+              map: { style: 'https://evil.example/style.json', center: { lat: 1, lon: 2 }, zoom: 4 },
+              shapes: [{ type: 'path', path: 'M0 0' }, { type: 'line', x0: 0, x1: 1 }] },
+  }));
+  assert.equal('geojson' in cleaned.data[0], false);
+  assert.deepEqual(Object.keys(cleaned.layout).sort(), ['map', 'shapes']);
+  assert.deepEqual(cleaned.layout.map, { center: { lat: 1, lon: 2 }, zoom: 4 });
+  assert.deepEqual(cleaned.layout.shapes, [{ type: 'line', x0: 0, x1: 1 }]);
+  const huge = charts.parseChartSpec(JSON.stringify({ data: [{ y: Array.from({ length: 20_001 }, (_, i) => i) }] }));
+  assert.match(huge.error, /too many points/);
+  assert.match(charts.parseChartSpec(JSON.stringify({ data: [{ type: 'bar', y: [1] }, { type: 'scattergeo', lat: [1], lon: [1] }] })).error, /mix map/);
+  assert.match(charts.parseChartSpec('{"data": [{"type": "bar", "y": [1, 2').error, /not valid JSON/);
+});

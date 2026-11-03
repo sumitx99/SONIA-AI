@@ -8,6 +8,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GEMINI_API = "https://generativelanguage.googleapis.com/v1beta/models"
 # Google retires model versions; override in .env instead of editing code.
 CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", "gemini-3.5-flash")
 # How long the model "thinks" before writing. "minimal" cuts time-to-first-word from ~4 s to
@@ -67,6 +68,32 @@ Tools: you may call tools from services the user connected to Sonia.
 - After using tools, say briefly which service the information came from."""
 
 
+# For answers shown in Sonia's chat, which draws ```plotly blocks as interactive charts.
+# (Other clients, e.g. MCP apps using ask_sonia, get plain Markdown without it.)
+CHART_INSTRUCTION = """
+
+Charts: when numbers in your answer are clearer as a picture, add one chart after the
+explanation, even if the user didn't ask for a chart. Good reasons:
+- comparing one measure across 3 or more items (scores, prices, counts);
+- a trend over time or over steps (years, epochs, versions);
+- parts of a whole (percentages that add up);
+- values per country, or places with known coordinates (a map).
+Don't add a chart for one or two numbers, for yes/no answers, or when you'd have to guess
+values. Every value must come from the Provided Document Context, a tool result, a web
+page, or the user's message; never invent or estimate numbers to fill a chart. If the user
+asks for a chart, make one; if the data isn't available, say so instead.
+Format: a fenced code block with the language "plotly" containing only JSON:
+{"data": [traces], "layout": {"title": "...", "xaxis": {"title": "..."}, "yaxis": {"title": "..."}}}
+- Trace types: bar, scatter (mode "lines", "markers" or "lines+markers"), pie, histogram,
+  box, heatmap; for maps choropleth (locationmode "country names" or "ISO-3"; or "USA-states"
+  with geo scope "usa"), scattergeo, or scattermap (lat/lon with layout.map center and zoom).
+  Don't mix map and non-map traces in one chart.
+- Name every series ("name") and label axes with units. Keep it to one chart per answer
+  unless the user asks for more, and at most a few hundred points.
+- No colors, fonts, sizes, images or URLs in the JSON: the app styles the chart.
+- Still state the key numbers in the text; the chart supports the answer, never replaces it."""
+
+
 # Added when the model may read web pages (and search). {search} names what it can do.
 WEB_INSTRUCTION = """
 
@@ -79,6 +106,11 @@ Web: you can read web pages whose links appear in the user's question{search}.
 
 
 NO_ANSWER = "I am sorry, but I was unable to generate a response for that query."
+
+
+def _auth_headers() -> dict:
+    # In a header, not the URL: request URLs end up in error messages and logs.
+    return {"x-goog-api-key": GOOGLE_API_KEY or ""}
 
 
 def user_turn(query: str, context: str) -> dict:
@@ -110,8 +142,8 @@ def get_llm_response(query: str, context: str):
     """
     Use Google Gemini to generate an answer with context, a defined persona, and safety guardrails.
     """
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{CHAT_MODEL}:generateContent?key={GOOGLE_API_KEY}"
-    response = requests.post(url, json=_request_body(query, context), timeout=120)
+    response = requests.post(f"{GEMINI_API}/{CHAT_MODEL}:generateContent", headers=_auth_headers(),
+                             json=_request_body(query, context), timeout=120)
     response.raise_for_status()
     answer = _text_of(response.json()).strip()
     # A blocked or empty response has no candidates.
@@ -125,7 +157,7 @@ def _web_tools(search: bool) -> list:
 
 def _post_stream(contents: list, function_declarations: list, search: bool) -> requests.Response:
     web = _web_tools(search)
-    instruction = SYSTEM_INSTRUCTION
+    instruction = SYSTEM_INSTRUCTION + CHART_INSTRUCTION
     if web:
         instruction += WEB_INSTRUCTION.format(search=", and search Google" if search else "")
     if function_declarations:
@@ -139,9 +171,8 @@ def _post_stream(contents: list, function_declarations: list, search: bool) -> r
         body["toolConfig"] = {"includeServerSideToolInvocations": True}
     if THINKING_LEVEL:
         body["generationConfig"] = {"thinkingConfig": {"thinkingLevel": THINKING_LEVEL}}
-    url = (f"https://generativelanguage.googleapis.com/v1beta/models/{CHAT_MODEL}"
-           f":streamGenerateContent?alt=sse&key={GOOGLE_API_KEY}")
-    return requests.post(url, json=body, stream=True, timeout=120)
+    return requests.post(f"{GEMINI_API}/{CHAT_MODEL}:streamGenerateContent?alt=sse", headers=_auth_headers(),
+                         json=body, stream=True, timeout=120)
 
 
 def stream_gemini_parts(contents: list, function_declarations: list):

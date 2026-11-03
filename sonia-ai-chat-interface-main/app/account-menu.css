@@ -120,6 +120,10 @@
 .mcp-connection { flex-direction:column; align-items:stretch !important; gap:10px !important; }
 .mcp-connection-head { display:flex; align-items:center; gap:10px; }
 .mcp-switch { display:inline-flex; align-items:center; gap:6px; font-size:11px; color:#666; flex:none; }
+.mcp-tools-toggle { display:inline-flex; align-items:center; gap:4px; flex:none; padding:4px 8px; border:1px solid #e4e4df; border-radius:999px; background:#fff; font-size:11px; color:#555; }
+.mcp-tools-toggle:hover { border-color:#cfcfc9; color:#222; }
+.mcp-tools-toggle svg { transition:transform 0.2s ease; }
+.mcp-tools-toggle[aria-expanded="true"] svg { transform:rotate(180deg); }
 .mcp-tools { display:flex; flex-direction:column; border-top:1px solid #eeeeea; }
 .mcp-tools li { display:flex; align-items:center; gap:10px; padding:8px 0 !important; border:0 !important; border-bottom:1px solid #f1f1ed !important; border-radius:0 !important; background:none !important; }
 .mcp-tool-name { display:flex; flex-direction:column; gap:1px; min-width:0; flex:1; }

@@ -1,13 +1,14 @@
 "use client";
 
-import { useRef, useState, type ComponentPropsWithoutRef } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import { useMemo, useRef, useState, type ComponentPropsWithoutRef } from "react";
+import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { Check, Copy, FileCode2 } from "lucide-react";
 import "katex/dist/katex.min.css";
 import remarkNoImages from "@/lib/remark-no-images";
+import { GraphComponent } from "@/components/graph-component";
 
 /** Readable plain text for a KaTeX formula, e.g. "O(n^2 \cdot d)" → "O(n^2 · d)". */
 function texToText(tex: string) {
@@ -99,13 +100,29 @@ function MarkdownTable(props: ComponentPropsWithoutRef<"table">) {
   );
 }
 
-const components: Components = {
-  // Only backend-verified attachments may render images. Model URLs can be invented,
-  // expired or relative paths from a PDF, and otherwise produce broken duplicates.
-  img: () => null,
-  table: ({ node: _node, ...props }) => <MarkdownTable {...props} />,
-  a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer nofollow" />,
-};
+/** The JSON inside a ```plotly code block, or null for any other block. */
+function plotlySource(node: ExtraProps["node"]): string | null {
+  const code = node?.children[0];
+  if (!code || code.type !== "element" || code.tagName !== "code") return null;
+  const classes = code.properties?.className;
+  if (!Array.isArray(classes) || !classes.includes("language-plotly")) return null;
+  return code.children.map((child) => (child.type === "text" ? child.value : "")).join("");
+}
+
+function markdownComponents(streaming: boolean): Components {
+  return {
+    // Only backend-verified attachments may render images. Model URLs can be invented,
+    // expired or relative paths from a PDF, and otherwise produce broken duplicates.
+    img: () => null,
+    table: ({ node: _node, ...props }) => <MarkdownTable {...props} />,
+    a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer nofollow" />,
+    // A ```plotly block is a chart the model drew from the answer's numbers.
+    pre: ({ node, ...props }) => {
+      const chart = plotlySource(node);
+      return chart === null ? <pre {...props} /> : <GraphComponent source={chart} streaming={streaming} />;
+    },
+  };
+}
 
 /**
  * Renders an answer written in GitHub-flavoured Markdown with $…$ / $$…$$ maths.
@@ -113,6 +130,7 @@ const components: Components = {
  * While `streaming`, a caret follows the last line of text.
  */
 export function MarkdownMessage({ content, streaming = false }: { content: string; streaming?: boolean }) {
+  const components = useMemo(() => markdownComponents(streaming), [streaming]);
   return (
     <div className={`markdown-body ${streaming ? "is-streaming" : ""}`} aria-busy={streaming}>
       <ReactMarkdown

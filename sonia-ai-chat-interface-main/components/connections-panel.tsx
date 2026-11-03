@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Loader2, Plug, Plus, RefreshCw, Server, Trash2, Unplug } from "lucide-react";
+import { ChevronDown, Loader2, Plug, Plus, RefreshCw, Server, Trash2, Unplug } from "lucide-react";
 import type { OAuthGrant } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import {
@@ -76,6 +76,9 @@ function ConnectionCard({ connection, onChange, onRemove }: {
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
+  // Servers like Zapier offer many tools, so the list stays folded until asked for.
+  const [showTools, setShowTools] = useState(false);
+  const toolsId = `mcp-tools-${connection.id}`;
 
   async function run(label: string, action: () => Promise<McpConnection | void>) {
     setBusy(label);
@@ -98,6 +101,13 @@ function ConnectionCard({ connection, onChange, onRemove }: {
           <strong>{connection.name}</strong>
           <small>{connection.url}</small>
         </span>
+        {connection.tools.length > 0 && (
+          <button type="button" className="mcp-tools-toggle" aria-expanded={showTools} aria-controls={toolsId}
+            onClick={() => setShowTools((open) => !open)}>
+            {connection.tools.length} {connection.tools.length === 1 ? "tool" : "tools"}
+            <ChevronDown size={14} aria-hidden />
+          </button>
+        )}
         <label className="mcp-switch">
           <input type="checkbox" checked={connection.enabled} disabled={busy !== null}
             onChange={(event) => run("toggle", () => updateMcpConnection(connection.id, { enabled: event.target.checked }))} />
@@ -107,8 +117,8 @@ function ConnectionCard({ connection, onChange, onRemove }: {
       {(error || connection.last_error) && <p className="connections-error" role="alert">{error || connection.last_error}</p>}
       {connection.tools.length === 0 ? (
         <p className="connections-empty">This server offers no tools.</p>
-      ) : (
-        <ul className="mcp-tools">
+      ) : showTools && (
+        <ul className="mcp-tools" id={toolsId}>
           {connection.tools.map((tool) => (
             <li key={tool.name}>
               <span className="mcp-tool-name">

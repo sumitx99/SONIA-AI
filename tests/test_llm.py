@@ -55,6 +55,23 @@ class WebToolTests(unittest.TestCase):
         _, [later] = self.stream(response(200, [CHUNK]))
         self.assertEqual(later["tools"], [{"url_context": {}}])
 
+    def test_chat_answers_may_draw_charts_but_other_clients_get_plain_markdown(self):
+        _, [body] = self.stream(response(200, [CHUNK]))
+        self.assertIn("plotly", body["system_instruction"]["parts"][0]["text"])
+        self.assertNotIn("plotly", llm._request_body("q", "ctx")["system_instruction"]["parts"][0]["text"])
+
+    def test_api_key_goes_in_a_header_never_the_url(self):
+        with patch.object(llm, "GOOGLE_API_KEY", "secret-key"), \
+             patch.object(llm.requests, "post", side_effect=[response(200, [CHUNK])]) as post:
+            list(llm.stream_gemini_parts([], []))
+        self.assertNotIn("secret-key", post.call_args.args[0])
+        self.assertEqual(post.call_args.kwargs["headers"], {"x-goog-api-key": "secret-key"})
+        with patch.object(llm, "GOOGLE_API_KEY", "secret-key"), patch.object(llm.requests, "post") as post:
+            post.return_value.json.return_value = CHUNK
+            llm.get_llm_response("q", "ctx")
+        self.assertNotIn("secret-key", post.call_args.args[0])
+        self.assertEqual(post.call_args.kwargs["headers"], {"x-goog-api-key": "secret-key"})
+
     def test_web_tools_can_be_switched_off(self):
         with patch.object(llm, "WEB_SEARCH", False), patch.object(llm, "URL_CONTEXT", False):
             _, [body] = self.stream(response(200, [CHUNK]))
