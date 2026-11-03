@@ -103,3 +103,18 @@
 .chat-sidebar .account-menu-trigger strong { font-size:12px; }
 .chat-sidebar .account-menu-trigger small { color:#717171; font-size:10px; }
 .chat-sidebar .sidebar-bottom > .form-notice { padding:0 10px 10px; }
+
+/* Connections: apps using Sonia (MCP server) and Sonia's own MCP connections */
+.connections-block { display:flex; flex-direction:column; gap:10px; padding-block:14px; border-top:1px solid #e4e4df; }
+.connections-block:first-of-type { border-top:0; padding-top:4px; }
+.connections-block h4 { font-size:12px; font-weight:600; }
+.connections-url { display:block; padding:9px 11px; border-radius:7px; background:#f3f2ee; font-family:var(--font-geist-mono), monospace; font-size:11px; overflow-wrap:anywhere; user-select:all; }
+.connections-empty { display:flex; align-items:center; gap:8px; font-size:11px; color:#888; }
+.connections-error { font-size:11px; color:#a13c2b; }
+.connections-list { display:flex; flex-direction:column; gap:8px; }
+.connections-list li { display:flex; align-items:center; gap:10px; padding:10px; border:1px solid #e4e4df; border-radius:8px; background:#fff; }
+.connections-icon { display:grid; place-items:center; flex:none; width:28px; height:28px; border-radius:7px; background:#f3ecdf; color:#743f32; }
+.connections-name { display:flex; flex-direction:column; gap:2px; min-width:0; flex:1; }
+.connections-name strong { font-size:12px; font-weight:600; overflow-wrap:anywhere; }
+.connections-name small { font-size:10px; color:#888; overflow-wrap:anywhere; }
+

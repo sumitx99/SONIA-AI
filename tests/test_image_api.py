@@ -5,7 +5,7 @@ import json
 import sys
 import types
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from fastapi.testclient import TestClient
 
@@ -31,6 +31,10 @@ class ImageAPITests(unittest.TestCase):
         network = patch("requests.post", side_effect=AssertionError("External calls are disabled in tests"))
         network.start()
         self.addCleanup(network.stop)
+        # No MCP connections: answers take the plain (tool-free) path without touching the DB.
+        no_tools = patch.object(backend, "available_tools", AsyncMock(return_value=([], {})))
+        no_tools.start()
+        self.addCleanup(no_tools.stop)
         # Signed in as user-1, who owns only document 7.
         backend.app.dependency_overrides[backend.current_user] = lambda: "user-1"
         self.addCleanup(backend.app.dependency_overrides.clear)

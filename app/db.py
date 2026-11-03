@@ -67,7 +67,12 @@ async def close_pool():
     global _pool
     if _pool is not None:
         pool, _pool = _pool, None
-        await pool.close()
+        try:
+            await pool.close()
+        except RuntimeError:
+            # The pool belongs to an event loop that has already closed (e.g. one app instance
+            # per test); its connections can't be closed politely, so drop them.
+            pool.terminate()
 
 
 _document_schema_ready = False

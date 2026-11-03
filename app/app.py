@@ -28,6 +28,9 @@ from app.image_pipeline import ingest_document_images, image_attachments
 from app.conversations import router as conversations_router
 from app.profiles import router as profiles_router
 from app.mcp_server.server import MCPMount, build_mcp_app
+from app.mcp_client.connections import router as mcp_connections_router
+from app.mcp_client.agent import answer_with_tools, available_tools, resolve_approval
+from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -70,6 +73,7 @@ async def lifespan(_app):
 app = FastAPI(title="Sonia Advanced RAG API", lifespan=lifespan)
 app.include_router(conversations_router)
 app.include_router(profiles_router)
+app.include_router(mcp_connections_router)
 _upload_slots = asyncio.Semaphore(1)
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
@@ -277,7 +281,8 @@ async def chat_stream(query: str = Form(...), document_ids: list[int] | None = F
     """Like /chat, but streams the answer as server-sent events while Gemini writes it.
 
     Events: `meta` (images and status, once), `delta` ({"text"}, repeatedly), then `done`,
-    or `error` ({"detail"}) if the answer breaks off part-way.
+    or `error` ({"detail"}) if the answer breaks off part-way. With MCP connections the model may
+    also call tools, reported as `tool_call` and, for tools that need consent, `approval_required`.
     """
     try:
         logger.info(f"Received streaming query: '{query}'")
@@ -290,11 +295,22 @@ async def chat_stream(query: str = Form(...), document_ids: list[int] | None = F
         logger.error(f"An unexpected error occurred during chat: {e}")
         raise HTTPException(status_code=500, detail=f"An internal server error occurred: {str(e)}")
 
+    try:
+        declarations, registry = await available_tools(user_id)
+    except Exception:
+        # Connections must never stop a plain answer (e.g. MCP_SECRET_KEY missing).
+        logger.exception("Couldn't load MCP connections; answering without tools")
+        declarations, registry = [], {}
+
     async def events():
         yield _sse("meta", meta)
         try:
-            async for piece in iterate_in_threadpool(stream_llm_response(query, context)):
-                yield _sse("delta", {"text": piece})
+            if declarations:
+                async for name, data in answer_with_tools(user_id, query, context, declarations, registry):
+                    yield _sse(name, data)
+            else:
+                async for piece in iterate_in_threadpool(stream_llm_response(query, context)):
+                    yield _sse("delta", {"text": piece})
             yield _sse("done", {})
         except Exception:
             logger.exception("Streaming the answer failed")
@@ -303,6 +319,18 @@ async def chat_stream(query: str = Form(...), document_ids: list[int] | None = F
     # No buffering by proxies, so each piece reaches the browser as soon as it is written.
     return StreamingResponse(events(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+class ApprovalInput(BaseModel):
+    approve: bool
+
+
+@app.post("/chat/approvals/{approval_id}", tags=["Chat"])
+async def decide_tool_call(approval_id: str, payload: ApprovalInput, user_id: str = Depends(current_user)):
+    """Approve or decline a tool call that a streaming answer is waiting on."""
+    if not resolve_approval(user_id, approval_id, payload.approve):
+        raise HTTPException(status_code=404, detail="This request has already been answered or has expired.")
+    return {"ok": True}
 
 
 @app.get("/documents/{document_id}/source", tags=["Document Handling"])
