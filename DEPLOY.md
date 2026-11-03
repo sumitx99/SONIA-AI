@@ -1,21 +1,23 @@
 # Deploying Sonia (free plans)
 
-- **API** → Render free web service (512 MB), from `render.yaml`
-- **Frontend** → Vercel Hobby (free), from `sonia-ai-chat-interface-main/`
+- **API** → Render free web service (512 MB), from `render.yaml` (code in `backend/`)
+- **Frontend** → Vercel Hobby (free), from `frontend/`
 - **Database / auth** → Supabase (already set up) · **Files** → Cloudflare R2 (already set up)
 
 On the free plan the API parses PDFs with PyMuPDF and skips the re-ranker
 (`PDF_PARSER=pymupdf`, `RERANKER=off`), which keeps it around 200–250 MB.
-Docling and the cross-encoder need ~2 GB: use `requirements-full.txt` and unset those two
+Docling and the cross-encoder need ~2 GB: use `backend/requirements-full.txt` and unset those two
 variables on a larger instance (e.g. Render Standard).
 
 ## 1. Push the code to GitHub
 
-`.env` and `.env.local` are git-ignored; never commit them.
+`backend/.env` and `frontend/.env.local` are git-ignored; never commit them.
 
 ## 2. API on Render
 
-1. Render → **New → Blueprint** → pick this repository. It reads `render.yaml`.
+1. Render → **New → Blueprint** → pick this repository. It reads `render.yaml`, which sets
+   **Root Directory** to `backend`. (For a service created by hand, set Settings → Root Directory
+   to `backend` and the start command to `uvicorn app.main:app --host 0.0.0.0 --port $PORT`.)
 2. Fill the secret values it asks for (same as your local `.env`):
    `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `GOOGLE_API_KEY`, `SUPABASE_URL`,
    `R2_ENDPOINT_URL`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`.
@@ -27,7 +29,7 @@ The free service sleeps after 15 minutes idle; the first request after that take
 ## 3. Frontend on Vercel
 
 1. Vercel → **Add New → Project** → this repository.
-2. **Root Directory:** `sonia-ai-chat-interface-main` (framework: Next.js).
+2. **Root Directory:** `frontend` (framework: Next.js).
 3. Environment variables:
    - `NEXT_PUBLIC_API_URL` = `https://<your-api>.onrender.com`
    - `NEXT_PUBLIC_SUPABASE_URL` = your Supabase project URL

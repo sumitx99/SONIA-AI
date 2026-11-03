@@ -5,8 +5,9 @@ services:
     name: sonia-api
     runtime: python
     plan: free
+    rootDir: backend
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.app:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /
     envVars:
       - key: PYTHON_VERSION

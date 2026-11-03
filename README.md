@@ -49,6 +49,54 @@ This isn't just a demo — it's a production-grade application with a modern tec
 
 ---
 
+## 📁 Project structure
+
+```
+SONIA-AI/
+├── backend/                  FastAPI API (deployed on Render)
+│   ├── app/
+│   │   ├── main.py           app, routers, CORS, MCP server mounted at /mcp
+│   │   ├── core/             config (.env), auth (Supabase JWT), db (asyncpg), schema.sql, init_db
+│   │   ├── api/              HTTP routes: chat, documents, conversations, profiles
+│   │   ├── services/         llm (Gemini), embeddings, retriever, context (what answers are grounded in)
+│   │   │   ├── parsing/      PDF → text: Docling or PyMuPDF, chunking
+│   │   │   └── images/       PDF images: extraction, R2 storage, search
+│   │   ├── mcp_client/       Sonia using the user's MCP servers as tools
+│   │   └── mcp_server/       other apps (Claude, Cursor…) using Sonia over MCP
+│   ├── tests/
+│   ├── scripts/              dev_notes_mcp.py, a local MCP server for testing
+│   ├── requirements.txt      (requirements-full.txt adds Docling and the re-ranker)
+│   └── .env.example
+├── frontend/                 Next.js app (deployed on Vercel)
+│   ├── app/                  pages: landing, auth, chat, oauth/consent; styles/
+│   ├── components/
+│   │   ├── chat/             answers: Markdown, charts (GraphComponent), images, tool calls
+│   │   ├── account/          account menu, Connections
+│   │   ├── landing/          landing page animations
+│   │   └── ui/               shadcn primitives
+│   ├── lib/                  api client, supabase; hooks/; markdown/ (chart spec, filters)
+│   └── tests/
+├── render.yaml               Render Blueprint (rootDir: backend)
+└── DEPLOY.md
+```
+
+### Run locally
+
+```bash
+cd backend
+cp .env.example .env            # then fill it in
+python -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python -m app.core.init_db
+.venv/bin/uvicorn app.main:app --reload --port 8000
+```
+
+```bash
+cd frontend
+cp .env.example .env.local      # then fill it in
+npm install
+npm run dev                     # http://localhost:3000
+```
+
 # 🏛️ High-Level Architecture
 
 This system is designed to handle document ingestion and question answering using a two-pipeline architecture.
@@ -131,7 +179,7 @@ Image retrieval embeds the heading and surrounding text; it does not analyze ima
 
 ### Configuration
 
-Install the updated `requirements.txt`, copy `.env.example` to `.env`, and configure the existing database and model services. To enable images, set all of:
+Install `backend/requirements.txt`, copy `backend/.env.example` to `backend/.env`, and configure the existing database and model services. To enable images, set all of:
 
 ```dotenv
 R2_ENDPOINT_URL=https://<account-id>.r2.cloudflarestorage.com
@@ -158,13 +206,13 @@ The chat UI sends the active conversation's uploaded document IDs for text and i
 
 Conversations are stored in PostgreSQL by the authenticated Supabase user ID through `GET /conversations`, `PUT /conversations/{id}`, and soft-delete `DELETE /conversations/{id}`. A browser backup is scoped to that account and pending saves retry when history reconnects. Signed image URLs are never persisted with messages. Documents previously uploaded under a user's `chat_id` are restored as document conversations even when the older frontend never stored their message text; unsaved historical message text cannot be reconstructed.
 
-Uploads accept PDFs up to 25 MB. The frontend retries temporary connection/service failures with the same `request_id`; a completed upload returns its earlier response rather than inserting another document. Parsing is serialized per API process to bound memory on small servers. Embedding requests have finite timeouts, smaller batches, and bounded retries for transient failures. Failed uploads clean up their incomplete DB record and newly allocated R2 objects. Use `python -m app.init_db` to apply the additive schema changes before deployment (also initialized lazily on use).
+Uploads accept PDFs up to 25 MB. The frontend retries temporary connection/service failures with the same `request_id`; a completed upload returns its earlier response rather than inserting another document. Parsing is serialized per API process to bound memory on small servers. Embedding requests have finite timeouts, smaller batches, and bounded retries for transient failures. Failed uploads clean up their incomplete DB record and newly allocated R2 objects. Use `python -m app.core.init_db` to apply the additive schema changes before deployment (also initialized lazily on use).
 
 ### Verification
 
 ```bash
-python -m unittest discover -s tests -v
-cd sonia-ai-chat-interface-main
+cd backend && PYTHONPATH=.:tests .venv/bin/python -m unittest discover -s tests -v
+cd ../frontend
 npm run typecheck
 npm test
 npm run build
@@ -185,4 +233,4 @@ Backend tests use generated PDFs and mock the model, parser service, database an
 
 The chat sidebar includes Profile, Personalization, Settings, Help and Log out. Display name, private bio, reduced motion and compact conversation preferences are stored in the account-owned `user_profiles` table. `GET /profile` and `PUT /profile` use the same Supabase Bearer authentication as conversations; the owner is derived from the verified token.
 
-`POST /profile/avatar` accepts JPEG, PNG or WebP up to 5 MB and 16 megapixels. Images are decoded, oriented, cropped to 512×512, stripped of metadata and encoded as WebP. The existing R2 configuration is reused; objects are private under `users/{user_id}/profile/avatars/{unique_id}.webp`. Only the object key is persisted. The frontend receives a temporary signed URL and renews it before expiry. Replacing or removing an avatar cleans up the previous object; failed database writes clean up the new upload. `DELETE /profile/avatar` removes the current photo without changing other profile details. Run `python -m app.init_db` for the additive table, or let it initialize on the first profile request.
+`POST /profile/avatar` accepts JPEG, PNG or WebP up to 5 MB and 16 megapixels. Images are decoded, oriented, cropped to 512×512, stripped of metadata and encoded as WebP. The existing R2 configuration is reused; objects are private under `users/{user_id}/profile/avatars/{unique_id}.webp`. Only the object key is persisted. The frontend receives a temporary signed URL and renews it before expiry. Replacing or removing an avatar cleans up the previous object; failed database writes clean up the new upload. `DELETE /profile/avatar` removes the current photo without changing other profile details. Run `python -m app.core.init_db` for the additive table, or let it initialize on the first profile request.
