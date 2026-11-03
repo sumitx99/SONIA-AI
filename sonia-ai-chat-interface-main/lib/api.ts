@@ -55,6 +55,12 @@ export interface ToolCall {
   summary?: string | null;
 }
 
+/** A web page Sonia read for an answer. */
+export interface WebSource {
+  title: string;
+  url: string;
+}
+
 export interface ChatMessage {
   id: string;
   content: string;
@@ -64,6 +70,7 @@ export interface ChatMessage {
   notice?: string | null;
   streaming?: boolean;
   tool_calls?: ToolCall[];
+  sources?: WebSource[];
 }
 
 export interface ChatSession {
@@ -217,6 +224,8 @@ export interface StreamHandlers {
   onDelta: (text: string) => void;
   /** A tool call starting, waiting for approval, or finishing (same id, newer status). */
   onToolCall?: (call: ToolCall) => void;
+  /** Web pages the answer used, once at the end. */
+  onSources?: (sources: WebSource[]) => void;
 }
 
 /**
@@ -268,6 +277,7 @@ export const streamMessage = async (
       const payload = JSON.parse(data);
       if (event === "meta") handlers.onMeta?.(payload);
       else if (event === "tool_call") handlers.onToolCall?.(payload);
+      else if (event === "sources") handlers.onSources?.(payload.sources);
       else if (event === "delta") {
         wroteText = true;
         handlers.onDelta(payload.text);

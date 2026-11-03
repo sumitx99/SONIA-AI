@@ -19,6 +19,7 @@ original_parser = sys.modules.get("app.docling_utils")
 sys.modules["app.docling_utils"] = parser
 try:
     backend = importlib.import_module("app.app")
+    agent = importlib.import_module("app.mcp_client.agent")
 finally:
     if original_parser is None:
         sys.modules.pop("app.docling_utils", None)
@@ -31,7 +32,7 @@ class ImageAPITests(unittest.TestCase):
         network = patch("requests.post", side_effect=AssertionError("External calls are disabled in tests"))
         network.start()
         self.addCleanup(network.stop)
-        # No MCP connections: answers take the plain (tool-free) path without touching the DB.
+        # No MCP connections, so answers don't touch the connections table.
         no_tools = patch.object(backend, "available_tools", AsyncMock(return_value=([], {})))
         no_tools.start()
         self.addCleanup(no_tools.stop)
@@ -106,10 +107,10 @@ class ImageAPITests(unittest.TestCase):
         _, text_search, _, _, _ = self.chat("Summarize", {"document_ids": [7, 8], "scope_documents": "true"})
         self.assertEqual(text_search.call_args.kwargs["document_ids"], [7])
 
-    def stream(self, query, pieces, data=None):
+    def stream(self, query, parts, data=None):
         with patch.object(backend, "get_embedding", return_value=[0.1]), \
              patch.object(backend, "get_reranked_context", return_value="Document text"), \
-             patch.object(backend, "stream_llm_response", return_value=iter(pieces)) as llm:
+             patch.object(agent, "stream_gemini_parts", return_value=iter(parts)) as llm:
             response = self.client.post("/chat/stream", data={"query": query, **(data or {})})
         events = []
         for frame in response.text.strip().split("\n\n"):
@@ -118,19 +119,36 @@ class ImageAPITests(unittest.TestCase):
         return response, events, llm
 
     def test_stream_sends_meta_then_text_pieces_then_done(self):
-        response, events, llm = self.stream("Summarize", ["Self-", "attention ", "**works**."],
-                                            {"document_ids": [7], "scope_documents": "true"})
+        parts = [{"text": "Self-"}, {"text": "attention "}, {"text": "**works**."}]
+        response, events, llm = self.stream("Summarize", parts, {"document_ids": [7], "scope_documents": "true"})
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.headers["content-type"].startswith("text/event-stream"))
         self.assertEqual([name for name, _ in events], ["meta", "delta", "delta", "delta", "done"])
         self.assertEqual(events[0][1]["image_status"], "not_requested")
         self.assertEqual("".join(data["text"] for name, data in events if name == "delta"),
                          "Self-attention **works**.")
-        self.assertEqual(llm.call_args.args, ("Summarize", "Document text"))
+        prompt = llm.call_args.args[0][0]["parts"][0]["text"]
+        self.assertIn("Document text", prompt)
+        self.assertIn("Summarize", prompt)
+
+    def test_stream_lists_web_sources_after_the_answer(self):
+        grounding = {"groundingChunks": [
+            {"web": {"uri": "https://example.com/a", "title": "Page A"}},
+            {"web": {"uri": "https://example.com/a", "title": "Page A again"}},
+            {"web": {"uri": "javascript:alert(1)", "title": "Not a web page"}}]}
+        _, events, _ = self.stream("Summarize https://example.com/a",
+                                   [{"text": "It says hi."}, {"groundingMetadata": grounding}])
+        self.assertEqual([name for name, _ in events], ["meta", "delta", "sources", "done"])
+        self.assertEqual(events[2][1], {"sources": [{"title": "Page A", "url": "https://example.com/a"}]})
+
+    def test_stream_says_so_when_the_model_writes_nothing(self):
+        _, events, _ = self.stream("Summarize", [])
+        self.assertEqual([name for name, _ in events], ["meta", "delta", "done"])
+        self.assertEqual(events[1][1]["text"], backend.NO_ANSWER)
 
     def test_stream_reports_an_answer_cut_off_part_way(self):
         def broken():
-            yield "Partial "
+            yield {"text": "Partial "}
             raise RuntimeError("connection reset")
         with self.assertLogs("app.app", level="ERROR"):
             _, events, _ = self.stream("Summarize", broken())

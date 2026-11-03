@@ -7,7 +7,7 @@ import os
 from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, UploadFile, File, Form, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.concurrency import iterate_in_threadpool, run_in_threadpool
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import RedirectResponse, Response, StreamingResponse
 from requests.exceptions import HTTPError, RequestException
 
@@ -17,7 +17,7 @@ from app.db import (insert_file, insert_embeddings, get_document_source, close_p
                     set_document_source_key, delete_document, owned_document_ids,
                     completed_upload, finish_upload)
 from app.embeddings import get_embedding, get_embeddings_batch
-from app.llm import get_llm_response, stream_llm_response
+from app.llm import NO_ANSWER, get_llm_response
 from app.pdf_utils import chunk_text
 from app.docling_utils import docling_enabled, process_pdf_with_docling
 from app.retriever import get_reranked_context, rank_contexts
@@ -281,8 +281,9 @@ async def chat_stream(query: str = Form(...), document_ids: list[int] | None = F
     """Like /chat, but streams the answer as server-sent events while Gemini writes it.
 
     Events: `meta` (images and status, once), `delta` ({"text"}, repeatedly), then `done`,
-    or `error` ({"detail"}) if the answer breaks off part-way. With MCP connections the model may
-    also call tools, reported as `tool_call` and, for tools that need consent, `approval_required`.
+    or `error` ({"detail"}) if the answer breaks off part-way. The model may read web pages, listed
+    in a `sources` event at the end. With MCP connections it may also call tools, reported as
+    `tool_call` and, for tools that need consent, `approval_required`.
     """
     try:
         logger.info(f"Received streaming query: '{query}'")
@@ -305,12 +306,12 @@ async def chat_stream(query: str = Form(...), document_ids: list[int] | None = F
     async def events():
         yield _sse("meta", meta)
         try:
-            if declarations:
-                async for name, data in answer_with_tools(user_id, query, context, declarations, registry):
-                    yield _sse(name, data)
-            else:
-                async for piece in iterate_in_threadpool(stream_llm_response(query, context)):
-                    yield _sse("delta", {"text": piece})
+            wrote_any = False
+            async for name, data in answer_with_tools(user_id, query, context, declarations, registry):
+                wrote_any = wrote_any or name == "delta"
+                yield _sse(name, data)
+            if not wrote_any:
+                yield _sse("delta", {"text": NO_ANSWER})
             yield _sse("done", {})
         except Exception:
             logger.exception("Streaming the answer failed")

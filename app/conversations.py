@@ -58,6 +58,12 @@ class SavedToolCall(BaseModel):
     summary: str | None = Field(None, max_length=500)
 
 
+class SavedSource(BaseModel):
+    """A web page Sonia read for an answer."""
+    title: str = Field("", max_length=200)
+    url: str = Field(max_length=2048, pattern=r"^https?://")
+
+
 class SavedMessage(BaseModel):
     id: str = Field(max_length=100)
     content: str = Field(max_length=100_000)
@@ -66,6 +72,7 @@ class SavedMessage(BaseModel):
     notice: str | None = Field(None, max_length=2000)
     images: list[SavedImage] = Field(default_factory=list, max_length=25)
     tool_calls: list[SavedToolCall] = Field(default_factory=list, max_length=30)
+    sources: list[SavedSource] = Field(default_factory=list, max_length=10)
 
 
 class ConversationInput(BaseModel):

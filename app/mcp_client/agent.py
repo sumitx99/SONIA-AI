@@ -1,4 +1,4 @@
-"""Answering with tools: Gemini may call tools from the user's MCP connections.
+"""Answering with tools: Gemini may read the web and call tools from the user's MCP connections.
 
 Each tool follows the user's policy for it: "allow" runs at once, "ask" pauses the answer
 until the user approves in chat (POST /chat/approvals/{id}), "off" is never offered.
@@ -6,6 +6,7 @@ Progress is reported as stream events for the chat UI:
   ("tool_call", {...status: running | awaiting_approval | done | error | denied})
   ("approval_required", {...})
   ("delta", {"text"})
+  ("sources", {"sources": [{"title", "url"}]})   web pages the answer used, once at the end
 """
 
 import asyncio
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 MAX_ROUNDS = 5
 MAX_TOOLS = 64
+MAX_SOURCES = 10
 APPROVAL_TIMEOUT = 120
 # approval id -> (user id, future resolved with True/False). One API instance, so in memory.
 _approvals: dict[str, tuple[str, asyncio.Future]] = {}
@@ -77,21 +79,33 @@ async def _run_tool(user_id: str, connection: dict, tool: dict, arguments: dict)
         return "The tool could not be reached or failed to run.", True
 
 
+def _add_sources(grounding: dict, sources: dict) -> None:
+    for chunk in grounding.get("groundingChunks") or []:
+        web = chunk.get("web") or {}
+        url = web.get("uri") or ""
+        if url.startswith(("https://", "http://")) and url not in sources and len(sources) < MAX_SOURCES:
+            sources[url] = {"title": (web.get("title") or url)[:200], "url": url[:2048]}
+
+
 async def answer_with_tools(user_id: str, query: str, context: str, declarations: list, registry: dict):
     """Yields (event, data) while answering; text arrives as "delta" events."""
     contents = [user_turn(query, context)]
+    sources: dict[str, dict] = {}
     for round_number in range(MAX_ROUNDS + 1):
         # The last round offers no tools, so the model has to answer with what it has.
         offered = declarations if round_number < MAX_ROUNDS else []
         model_parts, calls = [], []
         async for part in iterate_in_threadpool(stream_gemini_parts(contents, offered)):
+            if "groundingMetadata" in part:
+                _add_sources(part["groundingMetadata"], sources)
+                continue
             model_parts.append(part)
             if "functionCall" in part:
                 calls.append(part["functionCall"])
             elif part.get("text") and not part.get("thought"):
                 yield "delta", {"text": part["text"]}
         if not calls:
-            return
+            break
         contents.append({"role": "model", "parts": model_parts})
         responses = []
         for call in calls:
@@ -130,3 +144,5 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
                 response["id"] = call["id"]
             responses.append({"functionResponse": response})
         contents.append({"role": "user", "parts": responses})
+    if sources:
+        yield "sources", {"sources": list(sources.values())}

@@ -26,7 +26,7 @@ import { Brand, Emblem } from "@/components/brand";
 import { AccountMenu } from "@/components/account-menu";
 import { DocumentImageGallery } from "@/components/document-image";
 import { MarkdownMessage } from "@/components/markdown-message";
-import { ToolCalls } from "@/components/tool-calls";
+import { ToolCalls, WebSources } from "@/components/tool-calls";
 import { streamMessage, uploadPDF, deleteConversation, handleApiError, type ImageAttachment,
   type ChatMessage as Message, type ToolCall } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
@@ -153,6 +153,7 @@ export default function SoniaChatInterface() {
             : toolCalls.map((item, i) => (i === index ? { ...item, ...call } : item));
           update({ tool_calls: toolCalls });
         },
+        onSources: (sources) => update({ sources }),
       });
       update({
         streaming: false,
@@ -499,6 +500,7 @@ export default function SoniaChatInterface() {
                       {message.sender === "bot" && !message.error
                         ? <MarkdownMessage content={message.content} streaming={message.streaming} />
                         : <p>{message.content}</p>}
+                      {message.sender === "bot" && <WebSources sources={message.sources} />}
                       {message.notice && <p role="status" style={{ fontSize: 13, color: "var(--muted-foreground)" }}>{message.notice}</p>}
                       {message.images?.length ? <DocumentImageGallery images={message.images} /> : null}
                     </motion.article>

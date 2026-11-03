@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { AlertTriangle, Ban, Check, Hand, Loader2, Wrench } from "lucide-react";
-import { decideToolCall, handleApiError, type ToolCall } from "@/lib/api";
+import { AlertTriangle, Ban, Check, Globe, Hand, Loader2, Wrench } from "lucide-react";
+import { decideToolCall, handleApiError, type ToolCall, type WebSource } from "@/lib/api";
 
 const STATUS: Record<ToolCall["status"], { label: string; Icon: typeof Check }> = {
   awaiting_approval: { label: "Waiting for you", Icon: Hand },
@@ -80,5 +80,31 @@ export function ToolCalls({ calls }: { calls?: ToolCall[] }) {
           </details>
         ))}
     </div>
+  );
+}
+
+function hostOf(url: string) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+/** The web pages Sonia read for an answer. */
+export function WebSources({ sources }: { sources?: WebSource[] }) {
+  const links = sources?.filter((source) => /^https?:\/\//.test(source.url));
+  if (!links?.length) return null;
+  return (
+    <nav className="web-sources" aria-label="Web sources for this answer">
+      <span className="web-sources-label mono"><Globe size={12} aria-hidden /> Sources</span>
+      {links.map((source) => (
+        <a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer nofollow"
+           title={source.url}>
+          <span className="web-source-title">{source.title || hostOf(source.url)}</span>
+          <span className="web-source-host">{hostOf(source.url)}</span>
+        </a>
+      ))}
+    </nav>
   );
 }

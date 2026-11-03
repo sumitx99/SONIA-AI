@@ -3559,3 +3559,38 @@ pre.tool-chip-detail { font-family: var(--font-geist-mono), monospace; }
 .tool-approval-actions button:disabled { opacity: 0.6; cursor: progress; }
 @media (max-width: 760px) { .tool-calls { margin-left: 0; } }
 
+/* Web pages Sonia read for an answer */
+.web-sources {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 4px 31px;
+}
+.web-sources-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #8a7e6c;
+}
+.web-sources a {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 280px;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #faf6ee;
+  font-size: 12px;
+  color: #5c5245;
+  text-decoration: none;
+}
+.web-sources a:hover { border-color: #d9b98c; background: #fbf3e4; }
+.web-source-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.web-source-host { flex: none; font-size: 11px; color: #8a7e6c; }
+@media (max-width: 760px) { .web-sources { margin-left: 0; } }
+
