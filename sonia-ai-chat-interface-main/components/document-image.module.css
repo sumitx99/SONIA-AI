@@ -1,9 +1,9 @@
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
   align-items: start;
   gap: 12px;
-  max-width: 660px;
+  max-width: 920px;
   margin-top: 20px;
 }
 .figure {
@@ -29,12 +29,13 @@
   display: block;
   width: 100%;
   max-height: 440px;
+  height: min(440px, 55vh);
   padding: 0;
   border: 0;
   background: none;
   cursor: zoom-in;
 }
-.compact .frame { max-height: 220px; }
+.compact .frame { max-height: 320px; height: 300px; }
 .frame img {
   display: block;
   width: 100%;
@@ -229,9 +230,9 @@
 .next { right: 12px; }
 
 @media (max-width: 640px) {
-  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
   .mat { padding: 8px; }
-  .compact .frame { max-height: 160px; }
+  .compact .frame { max-height: 300px; height: 260px; }
   .stage { padding: 8px 8px 72px; }
   .nav { top: auto; bottom: 16px; transform: none; }
   .prev { left: calc(50% - 56px); }

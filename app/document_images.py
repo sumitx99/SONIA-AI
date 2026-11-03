@@ -53,10 +53,10 @@ def extract_document_images(pdf_bytes: bytes, markdown: str = "") -> list[dict]:
                     image_number += 1
                     # Render the exact visible region, preserving transparency and
                     # masks without returning a raw image's hidden background.
-                    pixmap = page.get_pixmap(
-                        clip=pymupdf.Rect(block["bbox"]) * page.rotation_matrix,
-                        dpi=144, alpha=False,
-                    )
+                    clip = pymupdf.Rect(block["bbox"]) * page.rotation_matrix
+                    # Bound raster memory on small servers, even for poster-sized PDFs.
+                    scale = min(2.0, 1600 / max(clip.width, clip.height, 1))
+                    pixmap = page.get_pixmap(clip=clip, matrix=pymupdf.Matrix(scale, scale), alpha=False)
                     events.append({
                         "kind": "image", "image_id": str(uuid4()),
                         "image_number": image_number, **location,

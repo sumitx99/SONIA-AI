@@ -83,6 +83,10 @@ async def ensure_document_schema():
             ALTER TABLE documents ADD COLUMN IF NOT EXISTS chat_id TEXT;
             ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_key TEXT;
             ALTER TABLE documents ADD COLUMN IF NOT EXISTS user_id TEXT;
+            ALTER TABLE documents ADD COLUMN IF NOT EXISTS upload_request_id TEXT;
+            ALTER TABLE documents ADD COLUMN IF NOT EXISTS upload_response JSONB;
+            CREATE UNIQUE INDEX IF NOT EXISTS documents_upload_request_idx
+                ON documents(user_id, upload_request_id) WHERE upload_request_id IS NOT NULL;
             CREATE INDEX IF NOT EXISTS documents_user_idx ON documents(user_id);
             ALTER TABLE documents ALTER COLUMN file DROP NOT NULL;
             CREATE INDEX IF NOT EXISTS documents_chat_idx ON documents(chat_id);
@@ -90,7 +94,7 @@ async def ensure_document_schema():
     _document_schema_ready = True
 
 
-async def insert_file(filename, file_bytes, chat_id=None, user_id=None):
+async def insert_file(filename, file_bytes, chat_id=None, user_id=None, request_id=None):
     """Inserts a file into the documents table and returns its ID.
 
     Pass file_bytes=None when the PDF itself is stored in R2 (see set_document_source_key).
@@ -98,8 +102,24 @@ async def insert_file(filename, file_bytes, chat_id=None, user_id=None):
     await ensure_document_schema()
     async with (await get_pool()).acquire() as conn:
         return await conn.fetchval(
-            "INSERT INTO documents (filename, file, chat_id, user_id) VALUES ($1, $2, $3, $4) RETURNING id",
-            filename, file_bytes, chat_id, user_id)
+            "INSERT INTO documents (filename, file, chat_id, user_id, upload_request_id) "
+            "VALUES ($1, $2, $3, $4, $5) RETURNING id", filename, file_bytes, chat_id, user_id, request_id)
+
+
+async def completed_upload(user_id, request_id):
+    if not request_id:
+        return None
+    await ensure_document_schema()
+    async with (await get_pool()).acquire() as conn:
+        return await conn.fetchval("SELECT upload_response FROM documents "
+                                   "WHERE user_id = $1 AND upload_request_id = $2", user_id, request_id)
+
+
+async def finish_upload(document_id, response):
+    import json
+    async with (await get_pool()).acquire() as conn:
+        await conn.execute("UPDATE documents SET upload_response = $1::jsonb WHERE id = $2",
+                           json.dumps(response), document_id)
 
 
 async def set_document_source_key(document_id, source_key):

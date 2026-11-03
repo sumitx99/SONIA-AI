@@ -152,7 +152,13 @@ Only new uploads extract images automatically. Documents uploaded before enablin
 - `GET /documents/{document_id}/images/{image_id}`: Fetch a specific image's metadata and renew its URL.
 - `GET /documents/{document_id}/source`: Open the original PDF; the frontend adds `#page=N` to jump to the source page.
 
-The chat UI sends the active conversation's uploaded document IDs for both text and image retrieval, renders image cards, and exposes before/after text and a source-page link. Document scope is not authorization: the existing API has no authentication layer. Protect these routes with document ownership checks before exposing private documents to multiple users.
+The chat UI sends the active conversation's uploaded document IDs for text and image retrieval. Every private API route verifies a Supabase access token and checks document ownership. Images render only from verified attachments; model-generated image Markdown and image-only tables are suppressed. Cards show a caption/page reference and open a larger viewer. Stored image references receive fresh presigned URLs when an older conversation is opened.
+
+## Persistent history and reliable uploads
+
+Conversations are stored in PostgreSQL by the authenticated Supabase user ID through `GET /conversations`, `PUT /conversations/{id}`, and soft-delete `DELETE /conversations/{id}`. A browser backup is scoped to that account and pending saves retry when history reconnects. Signed image URLs are never persisted with messages. Documents previously uploaded under a user's `chat_id` are restored as document conversations even when the older frontend never stored their message text; unsaved historical message text cannot be reconstructed.
+
+Uploads accept PDFs up to 25 MB. The frontend retries temporary connection/service failures with the same `request_id`; a completed upload returns its earlier response rather than inserting another document. Parsing is serialized per API process to bound memory on small servers. Embedding requests have finite timeouts, smaller batches, and bounded retries for transient failures. Failed uploads clean up their incomplete DB record and newly allocated R2 objects. Use `python -m app.init_db` to apply the additive schema changes before deployment (also initialized lazily on use).
 
 ### Verification
 
@@ -160,6 +166,7 @@ The chat UI sends the active conversation's uploaded document IDs for both text 
 python -m unittest discover -s tests -v
 cd sonia-ai-chat-interface-main
 npm run typecheck
+npm test
 npm run build
 ```
 

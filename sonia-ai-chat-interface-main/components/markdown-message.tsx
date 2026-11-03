@@ -7,6 +7,7 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { Check, Copy, FileCode2 } from "lucide-react";
 import "katex/dist/katex.min.css";
+import remarkNoImages from "@/lib/remark-no-images";
 
 /** Readable plain text for a KaTeX formula, e.g. "O(n^2 \cdot d)" → "O(n^2 · d)". */
 function texToText(tex: string) {
@@ -99,6 +100,9 @@ function MarkdownTable(props: ComponentPropsWithoutRef<"table">) {
 }
 
 const components: Components = {
+  // Only backend-verified attachments may render images. Model URLs can be invented,
+  // expired or relative paths from a PDF, and otherwise produce broken duplicates.
+  img: () => null,
   table: ({ node: _node, ...props }) => <MarkdownTable {...props} />,
   a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer nofollow" />,
 };
@@ -113,7 +117,7 @@ export function MarkdownMessage({ content, streaming = false }: { content: strin
     <div className={`markdown-body ${streaming ? "is-streaming" : ""}`} aria-busy={streaming}>
       <ReactMarkdown
         skipHtml
-        remarkPlugins={[remarkGfm, remarkMath]}
+        remarkPlugins={[remarkGfm, remarkMath, remarkNoImages]}
         rehypePlugins={[[rehypeKatex, { throwOnError: false, strict: "ignore" }]]}
         components={components}
       >

@@ -50,7 +50,8 @@ class R2ImageStorage:
             "s3", endpoint_url=values["R2_ENDPOINT_URL"],
             aws_access_key_id=values["R2_ACCESS_KEY_ID"],
             aws_secret_access_key=values["R2_SECRET_ACCESS_KEY"],
-            region_name="auto", config=Config(signature_version="s3v4"),
+            region_name="auto", config=Config(signature_version="s3v4", connect_timeout=10,
+                                               read_timeout=60, retries={"max_attempts": 3, "mode": "standard"}),
         )
         return cls(client, values["R2_BUCKET_NAME"], expires_in)
 
@@ -68,6 +69,13 @@ class R2ImageStorage:
 
     def delete(self, key: str):
         self.client.delete_object(Bucket=self.bucket, Key=key)
+
+    def delete_upload(self, prefix: str):
+        """Remove only the newly allocated document's objects after a failed upload."""
+        for page in self.client.get_paginator("list_objects_v2").paginate(Bucket=self.bucket, Prefix=prefix + "/"):
+            objects = [{"Key": item["Key"]} for item in page.get("Contents", [])]
+            if objects:
+                self.client.delete_objects(Bucket=self.bucket, Delete={"Objects": objects})
 
     def sign(self, key: str) -> str:
         return self.client.generate_presigned_url(

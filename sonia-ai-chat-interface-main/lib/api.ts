@@ -8,19 +8,79 @@ const API_BASE_URL = ((process.env.NEXT_PUBLIC_API_URL ?? "").trim().replace(/^[
 export class AuthRequiredError extends Error {}
 
 // Every API call carries the signed-in user's access token; the backend scopes data to that user.
-async function apiFetch(path: string, init: RequestInit = {}) {
+async function apiFetch(path: string, init: RequestInit = {}, expectedUserId?: string) {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
   if (!token) throw new AuthRequiredError("Please sign in to continue");
+  if (expectedUserId && data.session?.user.id !== expectedUserId) {
+    throw new AuthRequiredError("The signed-in account changed. Please reopen your conversation.");
+  }
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${token}`);
-  const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers });
+  let response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers });
+  if (response.status === 401) {
+    const refreshed = await supabase.auth.refreshSession();
+    if (refreshed.data.session) {
+      if (expectedUserId && refreshed.data.session.user.id !== expectedUserId) {
+        throw new AuthRequiredError("The signed-in account changed. Please reopen your conversation.");
+      }
+      headers.set("Authorization", `Bearer ${refreshed.data.session.access_token}`);
+      response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers });
+    }
+  }
   if (response.status === 401) {
     // The useSession listener sends the user back to the sign-in page.
     await supabase.auth.signOut();
     throw new AuthRequiredError("Your session has expired. Please sign in again");
   }
   return response;
+}
+
+async function responseError(response: Response) {
+  const payload = await response.json().catch(() => null);
+  const fallback = response.status >= 500
+    ? "The document service is starting up or temporarily unavailable. Please try again."
+    : `Request failed (${response.status}). Please try again.`;
+  return new Error(typeof payload?.detail === "string" ? payload.detail : fallback);
+}
+
+export interface ChatMessage {
+  id: string;
+  content: string;
+  sender: "user" | "bot";
+  error?: boolean;
+  images?: ImageAttachment[];
+  notice?: string | null;
+  streaming?: boolean;
+}
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  documents: string[];
+  documentIds: number[];
+  updatedAt?: string;
+  recovered?: boolean;
+}
+
+export async function loadConversations(userId?: string): Promise<ChatSession[]> {
+  const response = await apiFetch("/conversations", {}, userId);
+  if (!response.ok) throw await responseError(response);
+  return (await response.json()).conversations;
+}
+
+export async function saveConversation(chat: ChatSession, userId?: string) {
+  const response = await apiFetch(`/conversations/${encodeURIComponent(chat.id)}`, {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: chat.title, messages: chat.messages }),
+  }, userId);
+  if (!response.ok) throw await responseError(response);
+}
+
+export async function deleteConversation(id: string) {
+  const response = await apiFetch(`/conversations/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!response.ok) throw await responseError(response);
 }
 
 
@@ -67,30 +127,48 @@ export interface ApiError {
 }
 
 // Upload PDF file to backend; chatId groups its files under chats/{chatId}/ in storage
-export const uploadPDF = async (file: File, chatId?: string): Promise<UploadResponse> => {
+export const uploadPDF = async (file: File, chatId?: string, onStatus?: (status: string) => void): Promise<UploadResponse> => {
+  if (file.size > 25 * 1024 * 1024) throw new Error("Please upload a PDF smaller than 25 MB.");
+  const requestId = crypto.randomUUID();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 180_000);
   try {
     const formData = new FormData();
     formData.append("file", file);
     if (chatId) formData.append("chat_id", chatId);
+    formData.append("request_id", requestId);
+    onStatus?.(attempt ? "Reconnecting and retrying your upload…" : "Reading your PDF. The service may take a minute to wake up…");
 
     const response = await apiFetch("/upload", {
       method: "POST",
       body: formData,
+      signal: controller.signal,
     });
 
     if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(
-        errorData.detail || `HTTP error! status: ${response.status}`,
-      );
+      if (attempt < 2 && [429, 500, 502, 503, 504].includes(response.status)) {
+        onStatus?.("The document service is busy. Retrying automatically…");
+        await new Promise((resolve) => setTimeout(resolve, 2000 * (attempt + 1)));
+        continue;
+      }
+      throw await responseError(response);
     }
 
     const data = await response.json();
     return data;
   } catch (error) {
+    if (attempt < 2 && (error instanceof TypeError || (error instanceof Error && error.name === "AbortError"))) {
+      await new Promise((resolve) => setTimeout(resolve, 2000 * (attempt + 1)));
+      continue;
+    }
     console.error("Upload error:", error);
     throw error;
+  } finally {
+    clearTimeout(timer);
   }
+  }
+  throw new Error("The document service could not be reached. Please try again.");
 };
 
 // Send chat message to backend
@@ -109,10 +187,7 @@ export const sendMessage = async (query: string, documentIds?: number[]): Promis
     });
 
     if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(
-        errorData.detail || `HTTP error! status: ${response.status}`,
-      );
+      throw await responseError(response);
     }
 
     const data = await response.json();

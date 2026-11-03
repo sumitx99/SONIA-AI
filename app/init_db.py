@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.db import close_pool, ensure_document_schema, get_pool
 from app.image_db import ensure_image_schema
+from app.conversations import ensure_conversation_schema
 
 
 async def main():
@@ -16,6 +17,7 @@ async def main():
         await close_pool()
         await ensure_document_schema()
         await ensure_image_schema()
+        await ensure_conversation_schema()
         async with (await get_pool()).acquire() as conn:
             await conn.execute("ALTER TABLE document_images ENABLE ROW LEVEL SECURITY")
     finally:

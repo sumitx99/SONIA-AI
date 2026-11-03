@@ -21,18 +21,33 @@ def _normalize(values: List[float]) -> List[float]:
     return [v / norm for v in values] if norm else values
 
 # --- THIS IS THE CRITICAL CONSTANT ---
-# Google's API limit is 100 per batch. We'll use a slightly smaller number for safety.
-GOOGLE_EMBEDDING_BATCH_SIZE = 99
+# Small batches reduce request size and make transient failures cheaper to retry.
+GOOGLE_EMBEDDING_BATCH_SIZE = 20
+
+
+def _embed_request(operation, data):
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:{operation}"
+    for attempt in range(4):
+        try:
+            response = requests.post(url, headers={"x-goog-api-key": GOOGLE_API_KEY or ""},
+                                     json=data, timeout=(10, 60))
+            if response.status_code not in (429, 500, 502, 503, 504) or attempt == 3:
+                response.raise_for_status()
+                return response.json()
+            retry_after = response.headers.get("Retry-After", "")
+            delay = min(float(retry_after), 10) if retry_after.isdigit() else 2 ** attempt
+        except (requests.Timeout, requests.ConnectionError):
+            if attempt == 3:
+                raise
+            delay = 2 ** attempt
+        logger.warning("Retrying embedding request after transient failure (attempt %s)", attempt + 1)
+        time.sleep(delay)
 
 def get_embedding(text: str) -> List[float]:
     """Generates an embedding for a SINGLE text string."""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:embedContent?key={GOOGLE_API_KEY}"
-    headers = {"Content-Type": "application/json"}
     data = {"content": {"parts": [{"text": text}]}, "outputDimensionality": EMBEDDING_DIMENSIONS}
 
-    response = requests.post(url, headers=headers, json=data)
-    response.raise_for_status()
-    return _normalize(response.json()["embedding"]["values"])
+    return _normalize(_embed_request("embedContent", data)["embedding"]["values"])
 
 
 def get_embeddings_batch(texts: List[str]) -> List[List[float]]:
@@ -51,18 +66,15 @@ def get_embeddings_batch(texts: List[str]) -> List[List[float]]:
         logger.info(f"Processing batch {i//GOOGLE_EMBEDDING_BATCH_SIZE + 1} with {len(batch_texts)} chunks...")
 
         # Prepare the request for the current sub-batch
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:batchEmbedContents?key={GOOGLE_API_KEY}"
-        headers = {"Content-Type": "application/json"}
         requests_list = [{"model": f"models/{MODEL_NAME}", "content": {"parts": [{"text": text}]},
                           "outputDimensionality": EMBEDDING_DIMENSIONS} for text in batch_texts]
         data = {"requests": requests_list}
 
         # Make the API call for this specific sub-batch
-        response = requests.post(url, headers=headers, json=data)
-        response.raise_for_status()
-        
-        # Extract the embeddings from the response and add them to our main list
-        batch_embeddings = [_normalize(entry["values"]) for entry in response.json()["embeddings"]]
+        payload = _embed_request("batchEmbedContents", data)
+        batch_embeddings = [_normalize(entry["values"]) for entry in payload["embeddings"]]
+        if len(batch_embeddings) != len(batch_texts):
+            raise ValueError("The embedding service returned an incomplete batch")
         all_embeddings.extend(batch_embeddings)
         
         # A short pause between batches (not after the last) to stay under rate limits.

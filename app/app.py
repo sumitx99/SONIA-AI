@@ -8,12 +8,13 @@ from fastapi import Depends, FastAPI, UploadFile, File, Form, HTTPException, Que
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import iterate_in_threadpool, run_in_threadpool
 from fastapi.responses import RedirectResponse, Response, StreamingResponse
-from requests.exceptions import HTTPError
+from requests.exceptions import HTTPError, RequestException
 
 # --- MODIFIED IMPORTS ---
 from app.auth import current_user
 from app.db import (insert_file, insert_embeddings, get_document_source, close_pool,
-                    set_document_source_key, delete_document, owned_document_ids)
+                    set_document_source_key, delete_document, owned_document_ids,
+                    completed_upload, finish_upload)
 from app.embeddings import get_embedding, get_embeddings_batch
 from app.llm import get_llm_response, stream_llm_response
 from app.pdf_utils import chunk_text
@@ -23,11 +24,15 @@ from app.document_images import wants_images, requested_image_location
 from app.image_storage import R2ImageStorage, document_prefix, valid_chat_id
 from app.image_db import find_document_images
 from app.image_pipeline import ingest_document_images, image_attachments
+from app.conversations import router as conversations_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Sonia Advanced RAG API")
+app.include_router(conversations_router)
+_upload_slots = asyncio.Semaphore(1)
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
 # Comma-separated, e.g. "https://sonia.vercel.app,http://localhost:3000".
 origins = [origin.strip().rstrip("/") for origin in
@@ -66,29 +71,46 @@ async def close_database_pool():
 
 @app.get("/", tags=["General"])
 async def root():
-    return {"message": "Sonia Advanced RAG Chatbot API is running 🚀"}
+    return {"message": "Sonia Advanced RAG Chatbot API is running 🚀", "version": "history-upload-images-v2"}
 
 @app.post("/upload", tags=["Document Handling"])
 async def upload_pdf(file: UploadFile = File(...), chat_id: str | None = Form(None),
+                     request_id: str | None = Form(None),
                      user_id: str = Depends(current_user)):
     if not valid_chat_id(chat_id):
         raise HTTPException(status_code=422, detail="chat_id may only contain letters, digits, '-' and '_' (max 64)")
+    if request_id is not None and not valid_chat_id(request_id):
+        raise HTTPException(422, "Invalid upload request ID")
+    file_bytes = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(file_bytes) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "Please upload a PDF smaller than 25 MB.")
+    if not file_bytes or b"%PDF-" not in file_bytes[:1024]:
+        raise HTTPException(422, "This file is not a readable PDF.")
+    # A small Render instance must not parse several PDFs into memory at once.
+    async with _upload_slots:
+        cached = await completed_upload(user_id, request_id)
+        if cached:
+            return json.loads(cached) if isinstance(cached, str) else cached
+        return await _process_upload(file, file_bytes, chat_id, request_id, user_id)
+
+
+async def _process_upload(file, file_bytes, chat_id, request_id, user_id):
+    file_id = None
+    storage = None
+    source_key = None
+    prefix = None
+    succeeded = False
     try:
         logger.info(f"Receiving file: {file.filename} (chat {chat_id})")
-        file_bytes = await file.read()
 
         # With R2 configured the PDF goes to users/{user}/chats/{chat}/documents/{id}/source.pdf
         # and Postgres keeps only the key; without it the bytes stay in Postgres.
         storage = R2ImageStorage.from_env()
-        file_id = await insert_file(file.filename, None if storage else file_bytes, chat_id, user_id)
+        file_id = await insert_file(file.filename, None if storage else file_bytes, chat_id, user_id, request_id)
         prefix = document_prefix(user_id, chat_id, file_id)
         if storage:
-            try:
-                source_key = await asyncio.to_thread(storage.upload_pdf, prefix, file_bytes)
-                await set_document_source_key(file_id, source_key)
-            except Exception:
-                await delete_document(file_id)
-                raise
+            source_key = await asyncio.to_thread(storage.upload_pdf, prefix, file_bytes)
+            await set_document_source_key(file_id, source_key)
         logger.info(f"File '{file.filename}' stored with ID: {file_id}")
 
         # Layout-aware Markdown via Docling (or PyMuPDF text), off the event loop: it takes seconds.
@@ -123,17 +145,34 @@ async def upload_pdf(file: UploadFile = File(...), chat_id: str | None = Form(No
             images_status = "failed"
             warnings.append("Text is ready, but image processing failed. Check the server configuration and logs.")
 
-        return {"file_id": file_id, "filename": file.filename, "chunks_stored": len(chunks),
-                "images_stored": images_stored, "images_status": images_status, "warnings": warnings}
+        result = {"file_id": file_id, "filename": file.filename, "chunks_stored": len(chunks),
+                  "images_stored": images_stored, "images_status": images_status, "warnings": warnings}
+        # A retry after a lost response returns this result without creating a duplicate.
+        await finish_upload(file_id, result)
+        succeeded = True
+        return result
 
     except HTTPException:
         raise
     except HTTPError as e:
-        logger.error(f"HTTPError during API call: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to communicate with an external AI service: {e.response.text}")
+        status = e.response.status_code if e.response is not None else 503
+        logger.error("Embedding service failed with HTTP %s", status)
+        raise HTTPException(status_code=503 if status in (429, 500, 502, 503, 504) else 502,
+                            detail="The document service is busy. Please try this upload again.")
+    except RequestException:
+        logger.warning("The document service timed out or could not be reached")
+        raise HTTPException(503, "The document service did not respond. Please try again.")
     except Exception as e:
-        logger.error(f"An unexpected error occurred during file upload: {e}")
-        raise HTTPException(status_code=500, detail=f"An internal server error occurred: {str(e)}")
+        logger.exception("Document upload failed")
+        raise HTTPException(500, "The document could not be processed. Please try again.")
+    finally:
+        if file_id is not None and not succeeded:
+            try:
+                await delete_document(file_id)
+                if storage and prefix:
+                    await asyncio.to_thread(storage.delete_upload, prefix)
+            except Exception:
+                logger.exception("Could not clean up failed upload %s", file_id)
 
 
 async def _answer_context(query, document_ids, scope_documents, include_images, user_id):

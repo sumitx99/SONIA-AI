@@ -36,7 +36,10 @@ Formatting (the answer is rendered as GitHub-flavoured Markdown):
   - never wrap a table in a code block.
 - Write maths with LaTeX: inline as $O(n^2 \\cdot d)$, on its own line as $$...$$.
 - Put code in fenced code blocks with a language tag.
-- Never output raw HTML."""
+- Never output raw HTML.
+- Never output Markdown image syntax, image URLs, or tables containing images.
+  The application displays retrieved document images in a separate gallery. Refer to
+  their captions/page numbers in text; do not claim a missing image was retrieved."""
 
 
 def _request_body(query: str, context: str) -> dict:

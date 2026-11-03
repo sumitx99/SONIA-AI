@@ -39,6 +39,9 @@ class ImageAPITests(unittest.TestCase):
         self.owned = owned.start()
         self.addCleanup(owned.stop)
         self.client = TestClient(backend.app)
+        finish = patch.object(backend, "finish_upload")
+        finish.start()
+        self.addCleanup(finish.stop)
         self.image = {"image_id": "image-1", "document_id": 7, "page_number": 12,
                       "image_number": 2, "object_key": "private-image-key",
                       "search_text": "API architecture", "heading_path": ["Architecture"],
@@ -213,7 +216,7 @@ class ImageAPITests(unittest.TestCase):
             response = self.client.post("/upload", data={"chat_id": "chat-1"},
                                         files={"file": ("guide.pdf", pdf, "application/pdf")})
         self.assertEqual(response.status_code, 200, response.text)
-        insert.assert_called_once_with("guide.pdf", None, "chat-1", "user-1")
+        insert.assert_called_once_with("guide.pdf", None, "chat-1", "user-1", None)
         self.storage.upload_pdf.assert_called_once_with(prefix, pdf)
         set_key.assert_called_once_with(7, f"{prefix}/source.pdf")
         self.assertEqual(self.storage.upload.call_args.args[0], prefix)

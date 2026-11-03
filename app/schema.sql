@@ -31,3 +31,15 @@ CREATE INDEX IF NOT EXISTS document_chunks_embedding_idx
 -- anon/authenticated API keys see nothing; the backend's postgres role bypasses RLS.
 ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE document_chunks ENABLE ROW LEVEL SECURITY;
+
+-- API access is always scoped to the verified Supabase subject, never the email string.
+CREATE TABLE IF NOT EXISTS conversations (
+    user_id TEXT NOT NULL,
+    id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    messages JSONB NOT NULL DEFAULT '[]'::jsonb,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    deleted_at TIMESTAMPTZ,
+    PRIMARY KEY (user_id, id)
+);
+ALTER TABLE conversations ENABLE ROW LEVEL SECURITY;

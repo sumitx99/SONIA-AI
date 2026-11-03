@@ -27,27 +27,11 @@ import {
 import { Brand, Emblem } from "@/components/brand";
 import { DocumentImageGallery } from "@/components/document-image";
 import { MarkdownMessage } from "@/components/markdown-message";
-import { streamMessage, uploadPDF, handleApiError, type ImageAttachment } from "@/lib/api";
+import { streamMessage, uploadPDF, deleteConversation, handleApiError, type ImageAttachment,
+  type ChatMessage as Message } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import { useSession } from "@/lib/use-session";
-
-interface Message {
-  id: string;
-  content: string;
-  sender: "user" | "bot";
-  error?: boolean;
-  images?: ImageAttachment[];
-  notice?: string | null;
-  /** True while the answer is still arriving. */
-  streaming?: boolean;
-}
-interface ChatSession {
-  id: string;
-  title: string;
-  messages: Message[];
-  documents: string[];
-  documentIds: number[];
-}
+import { useConversations } from "@/lib/use-conversations";
 
 const suggestions = [
   "Summarize the key ideas",
@@ -58,7 +42,8 @@ const suggestions = [
 export default function SoniaChatInterface() {
   const router = useRouter();
   const { session, ready } = useSession();
-  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const { sessions, setSessions, loaded: historyLoaded, error: historyError,
+    setError: setHistoryError, retry: retryHistory } = useConversations(session?.user.id);
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [pending, setPending] = useState<{
@@ -69,12 +54,19 @@ export default function SoniaChatInterface() {
   const [title, setTitle] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [fileError, setFileError] = useState("");
+  const [uploadStatus, setUploadStatus] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const end = useRef<HTMLDivElement>(null);
   const busy = useRef(false);
   const current = sessions.find((session) => session.id === currentId);
   const messages = current?.messages ?? [];
+
+  useEffect(() => { setCurrentId(null); }, [session?.user.id]);
+
+  useEffect(() => {
+    if (historyLoaded && !currentId && sessions.length) setCurrentId(sessions[0].id);
+  }, [historyLoaded, currentId, sessions]);
 
   // Signed-out visitors (or an expired session) go to the sign-in page.
   useEffect(() => {
@@ -111,7 +103,7 @@ export default function SoniaChatInterface() {
 
   async function ask() {
     const query = input.trim();
-    if (!query || busy.current) return;
+    if (!query || busy.current || !historyLoaded) return;
     busy.current = true;
     const id = currentId ?? newChat();
     append(id, { id: crypto.randomUUID(), content: query, sender: "user" });
@@ -173,7 +165,7 @@ export default function SoniaChatInterface() {
   async function upload(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
-    if (!file || busy.current) return;
+    if (!file || busy.current || !historyLoaded) return;
     if (!file.name.toLowerCase().endsWith(".pdf")) {
       setFileError("Please choose a PDF document.");
       return;
@@ -183,7 +175,7 @@ export default function SoniaChatInterface() {
     const id = currentId ?? newChat();
     setPending({ id, kind: "upload" });
     try {
-      const response = await uploadPDF(file, id);
+      const response = await uploadPDF(file, id, setUploadStatus);
       if (response.success === false)
         throw new Error(
           response.message || "The document could not be processed",
@@ -205,7 +197,7 @@ export default function SoniaChatInterface() {
       );
       append(id, {
         id: crypto.randomUUID(),
-        content: `“${file.name}” is ready.${response.images_status === "ready" ? ` ${response.images_stored ?? 0} images are available—ask to see an image or specify a page.` : ""} What would you like to discover?`,
+        content: `“${file.name}” is ready.${response.images_status === "ready" ? ` ${response.images_stored ?? 0} image${response.images_stored === 1 ? " is" : "s are"} available—ask to see an image or specify a page.` : ""} What would you like to discover?`,
         sender: "bot",
         notice: response.warnings?.join(" ") || (response.images_status === "disabled"
           ? "Image extraction is unavailable until image storage is configured." : null),
@@ -223,7 +215,13 @@ export default function SoniaChatInterface() {
     }
   }
 
-  function remove(id: string) {
+  async function remove(id: string) {
+    try {
+      await deleteConversation(id);
+    } catch (error) {
+      setHistoryError(`The conversation could not be deleted. ${handleApiError(error)}`);
+      return;
+    }
     setSessions((previous) => previous.filter((session) => session.id !== id));
     if (currentId === id) {
       setCurrentId(null);
@@ -292,7 +290,7 @@ export default function SoniaChatInterface() {
               <X size={18} />
             </button>
           </div>
-          <button className="button button-ink new-chat" onClick={newChat}>
+          <button className="button button-ink new-chat" onClick={newChat} disabled={!historyLoaded}>
             <Plus size={16} /> A fresh conversation
           </button>
           <div className="sidebar-section-label mono">
@@ -388,7 +386,10 @@ export default function SoniaChatInterface() {
               <br />
               <em>for big ideas.</em>
             </p>
-            <span className="mono">HISTORY LASTS FOR THIS VISIT</span>
+            <span className="mono">{!historyLoaded ? "LOADING YOUR HISTORY…" : historyError ? "LOCAL BACKUP · SYNC PENDING" : "HISTORY SAVED TO YOUR ACCOUNT"}</span>
+            {historyError && <div role="status" className="form-notice">
+              <p>{historyError}</p><button type="button" className="text-link" onClick={retryHistory}>Retry sync</button>
+            </div>}
             <div className="account-user">
               <span>Signed in as</span>
               <strong>{session.user.email}</strong>
@@ -424,6 +425,9 @@ export default function SoniaChatInterface() {
             </span>
           </header>
           <div className="chat-scroll">
+            {current?.recovered && !messages.length && <p role="status" className="form-notice">
+              Your uploaded documents were restored. Earlier message text was not saved by the previous version.
+            </p>}
             {!messages.length ? (
               <motion.div
                 className="chat-welcome"
@@ -502,7 +506,7 @@ export default function SoniaChatInterface() {
                 <Emblem />
                 <span>
                   {pending.kind === "upload"
-                    ? "Reading between the lines…"
+                    ? uploadStatus || "Reading between the lines…"
                     : "A little thinking in progress…"}
                 </span>
                 <span className="thinking-dots" aria-hidden="true">
@@ -542,7 +546,7 @@ export default function SoniaChatInterface() {
                 onKeyDown={onKeyDown}
                 placeholder="What’s on your mind?"
                 rows={2}
-                disabled={!!pending}
+                disabled={!!pending || !historyLoaded}
               />
               <div className="composer-controls">
                 <button

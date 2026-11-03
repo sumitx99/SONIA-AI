@@ -23,28 +23,41 @@ function useSignedImages(images: ImageAttachment[]) {
   itemsRef.current = items;
   const imagesRef = useRef(images);
   imagesRef.current = images;
-  const inFlight = useRef(new Map<number, Promise<boolean>>());
+  const inFlight = useRef(new Map<string, Promise<boolean>>());
+
+  useEffect(() => {
+    setItems((previous) => images.map((attachment) => {
+      const current = previous.find((item) => item.attachment.image_id === attachment.image_id
+        && item.attachment.document_id === attachment.document_id);
+      return current && (!attachment.url || current.attachment.url === attachment.url)
+        ? current : { attachment, signedAt: Date.now() };
+    }));
+  }, [images]);
 
   // Concurrent callers (card + lightbox) share one request per image.
   const refresh = useCallback<Refresh>((index) => {
-    const running = inFlight.current.get(index);
+    const image = imagesRef.current[index];
+    if (!image) return Promise.resolve(false);
+    const key = `${image.document_id}:${image.image_id}`;
+    const running = inFlight.current.get(key);
     if (running) return running;
-    const { document_id, image_id } = imagesRef.current[index];
+    const { document_id, image_id } = image;
     const request = refreshDocumentImage(document_id, image_id)
       .then((attachment) => {
-        setItems((previous) => previous.map((item, i) =>
-          i === index ? { attachment, signedAt: Date.now() } : item));
+        setItems((previous) => previous.map((item) =>
+          item.attachment.image_id === image_id && item.attachment.document_id === document_id
+            ? { attachment, signedAt: Date.now() } : item));
         return true;
       })
       .catch(() => false)
-      .finally(() => inFlight.current.delete(index));
-    inFlight.current.set(index, request);
+      .finally(() => inFlight.current.delete(key));
+    inFlight.current.set(key, request);
     return request;
   }, []);
 
   const ensureFresh = useCallback((index: number) => {
     const item = itemsRef.current[index];
-    if (item && Date.now() - item.signedAt > item.attachment.url_expires_in * 1000 - EXPIRY_MARGIN_MS) {
+    if (item && (!item.attachment.url || Date.now() - item.signedAt > item.attachment.url_expires_in * 1000 - EXPIRY_MARGIN_MS)) {
       void refresh(index);
     }
   }, [refresh]);
@@ -70,6 +83,7 @@ function ImageCard({ item, index, compact, onOpen, onRefresh }: {
   const status = failedUrl === attachment.url ? "failed" : loadedUrl === attachment.url ? "ready" : "loading";
   const [reloading, setReloading] = useState(false);
   const retried = useRef(false);
+  const imageRef = useRef<HTMLImageElement>(null);
 
   async function recover(manual: boolean) {
     const url = attachment.url;
@@ -79,8 +93,21 @@ function ImageCard({ item, index, compact, onOpen, onRefresh }: {
     const renewed = await onRefresh(index);
     setReloading(false);
     if (!renewed) setFailedUrl(url);
-    else if (manual) setFailedUrl(null);
+    else setFailedUrl(null);
   }
+
+  useEffect(() => {
+    if (!attachment.url) void recover(false);
+    // Persisted history contains stable IDs, so renew before trying to show it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attachment.image_id, attachment.url]);
+
+  useEffect(() => {
+    // A cached image may finish before hydration attaches its load handler.
+    if (imageRef.current?.complete && imageRef.current.naturalWidth > 0) {
+      setLoadedUrl(attachment.url);
+    }
+  }, [attachment.url, item.signedAt]);
 
   return (
     <figure className={`${styles.figure} ${compact ? styles.compact : ""}`}>
@@ -99,7 +126,7 @@ function ImageCard({ item, index, compact, onOpen, onRefresh }: {
             onClick={() => onOpen(index)} aria-label={`Enlarge ${label}`}>
             {status === "loading" && <span className={styles.skeleton} aria-hidden />}
             {/* R2 links are temporary; a plain image avoids proxying private URLs through Next.js. */}
-            <img src={attachment.url} alt={label} width={attachment.width} height={attachment.height}
+            <img ref={imageRef} key={item.signedAt} src={attachment.url || undefined} alt={attachment.caption || label} width={attachment.width} height={attachment.height}
               loading="lazy" decoding="async" referrerPolicy="no-referrer"
               data-ready={status === "ready"}
               onLoad={() => { retried.current = false; setLoadedUrl(attachment.url); }}
@@ -195,7 +222,7 @@ function Lightbox({ items, index, onIndex, onClose, onRefresh, ensureFresh }: {
                     <span>This image couldn’t be loaded.</span>
                   </div>
                 ) : (
-                  <img key={current.attachment.url} src={current.attachment.url}
+                  <img key={current.signedAt} src={current.attachment.url || undefined}
                     alt={labelOf(current.attachment)} referrerPolicy="no-referrer"
                     onClick={() => setZoomed((z) => !z)} onError={recover} />
                 )}
