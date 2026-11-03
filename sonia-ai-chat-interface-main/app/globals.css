@@ -3473,3 +3473,89 @@ h2 {
 @media (max-width: 480px) {
   .consent-card { padding: 28px 20px; }
 }
+
+/* Tools Sonia used for an answer (MCP connections) */
+.tool-calls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 14px 31px;
+}
+.tool-chip {
+  max-width: 620px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #faf6ee;
+  font-size: 12px;
+}
+.tool-chip summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 11px;
+  cursor: pointer;
+  list-style: none;
+  color: #5c5245;
+}
+.tool-chip summary::-webkit-details-marker { display: none; }
+.tool-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-chip-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  flex: none;
+  font-size: 11px;
+  color: #8a7e6c;
+}
+.tool-chip.is-done .tool-chip-status { color: #4f6b3d; }
+.tool-chip.is-error .tool-chip-status,
+.tool-chip.is-denied .tool-chip-status { color: #a13c2b; }
+.tool-chip-detail {
+  margin: 0;
+  padding: 8px 11px 10px;
+  border-top: 1px solid var(--line);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: #5c5245;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+pre.tool-chip-detail { font-family: var(--font-geist-mono), monospace; }
+.tool-approval {
+  max-width: 620px;
+  padding: 14px 16px;
+  border: 1px solid #d9b98c;
+  border-radius: 10px;
+  background: #fbf3e4;
+  font-size: 13px;
+}
+.tool-approval > p { line-height: 1.6; }
+.tool-arguments {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #fffaf1;
+  font-size: 12px;
+}
+.tool-arguments > div { display: grid; grid-template-columns: minmax(70px, auto) 1fr; gap: 10px; }
+.tool-arguments dt { color: #8a7e6c; font-family: var(--font-geist-mono), monospace; font-size: 11px; }
+.tool-arguments dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.tool-error { margin-top: 8px; color: #a13c2b; font-size: 12px; }
+.tool-approval-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.tool-approval-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fffaf1;
+  font-size: 12px;
+}
+.tool-approval-actions button.is-primary { border-color: var(--orange); background: var(--orange); color: #fffaf1; }
+.tool-approval-actions button:disabled { opacity: 0.6; cursor: progress; }
+@media (max-width: 760px) { .tool-calls { margin-left: 0; } }
+

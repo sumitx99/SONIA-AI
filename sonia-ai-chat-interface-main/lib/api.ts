@@ -44,6 +44,17 @@ async function responseError(response: Response) {
   return new Error(typeof payload?.detail === "string" ? payload.detail : fallback);
 }
 
+/** A tool from one of the user's MCP connections that Sonia used (or asked to use) for an answer. */
+export interface ToolCall {
+  id: string;
+  server: string;
+  tool: string;
+  title: string;
+  status: "awaiting_approval" | "running" | "done" | "error" | "denied";
+  arguments?: Record<string, unknown>;
+  summary?: string | null;
+}
+
 export interface ChatMessage {
   id: string;
   content: string;
@@ -52,6 +63,7 @@ export interface ChatMessage {
   images?: ImageAttachment[];
   notice?: string | null;
   streaming?: boolean;
+  tool_calls?: ToolCall[];
 }
 
 export interface ChatSession {
@@ -203,6 +215,8 @@ export interface StreamHandlers {
   onMeta?: (meta: Omit<ChatResponse, "query" | "answer">) => void;
   /** Each new piece of the answer, in order. */
   onDelta: (text: string) => void;
+  /** A tool call starting, waiting for approval, or finishing (same id, newer status). */
+  onToolCall?: (call: ToolCall) => void;
 }
 
 /**
@@ -253,6 +267,7 @@ export const streamMessage = async (
       if (!data) continue;
       const payload = JSON.parse(data);
       if (event === "meta") handlers.onMeta?.(payload);
+      else if (event === "tool_call") handlers.onToolCall?.(payload);
       else if (event === "delta") {
         wroteText = true;
         handlers.onDelta(payload.text);
@@ -334,3 +349,63 @@ export async function deleteAvatar(userId: string): Promise<AccountProfile> {
   if (!response.ok) throw await responseError(response);
   return response.json();
 }
+
+// Approve or decline a tool call an answer is waiting on.
+export const decideToolCall = async (approvalId: string, approve: boolean) => {
+  const response = await apiFetch(`/chat/approvals/${encodeURIComponent(approvalId)}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ approve }),
+  });
+  if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || "That request has expired");
+};
+
+// --- MCP connections: servers whose tools Sonia may use in chat ---
+
+export type ToolPolicy = "allow" | "ask" | "off";
+
+export interface McpTool {
+  name: string;
+  title: string;
+  description: string;
+  read_only: boolean;
+  destructive: boolean;
+  policy: ToolPolicy;
+}
+
+export interface McpConnection {
+  id: string;
+  name: string;
+  url: string;
+  auth_type: "none" | "header" | "oauth";
+  enabled: boolean;
+  last_error: string | null;
+  created_at: string;
+  tools: McpTool[];
+}
+
+async function connectionsRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await apiFetch(`/mcp-connections${path}`, {
+    ...init, headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+  });
+  if (!response.ok) {
+    const detail = (await response.json().catch(() => ({}))).detail;
+    throw new Error(typeof detail === "string" ? detail : "The request couldn’t be completed");
+  }
+  return (response.status === 204 ? undefined : await response.json()) as T;
+}
+
+export const listMcpConnections = async () =>
+  (await connectionsRequest<{ connections: McpConnection[] }>("")).connections;
+
+export const addMcpConnection = (input: { name: string; url: string; auth_type: "none" | "header";
+  header_name?: string; header_value?: string }) =>
+  connectionsRequest<McpConnection>("", { method: "POST", body: JSON.stringify(input) });
+
+export const refreshMcpConnection = (id: string) =>
+  connectionsRequest<McpConnection>(`/${id}/refresh`, { method: "POST" });
+
+export const updateMcpConnection = (id: string, changes: { name?: string; enabled?: boolean;
+  tool_policies?: Record<string, ToolPolicy> }) =>
+  connectionsRequest<McpConnection>(`/${id}`, { method: "PATCH", body: JSON.stringify(changes) });
+
+export const deleteMcpConnection = (id: string) =>
+  connectionsRequest<void>(`/${id}`, { method: "DELETE" });

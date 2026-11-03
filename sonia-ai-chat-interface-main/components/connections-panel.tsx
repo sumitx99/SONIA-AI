@@ -1,9 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { Loader2, Plug, Unplug } from "lucide-react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { Loader2, Plug, Plus, RefreshCw, Server, Trash2, Unplug } from "lucide-react";
 import type { OAuthGrant } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
+import {
+  addMcpConnection, deleteMcpConnection, handleApiError, listMcpConnections, refreshMcpConnection,
+  updateMcpConnection, type McpConnection, type ToolPolicy,
+} from "@/lib/api";
 
 const MCP_URL = `${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").trim().replace(/\/+$/, "")}/mcp`;
 
@@ -65,10 +69,186 @@ function AppsUsingSonia() {
   );
 }
 
+const POLICY_LABELS: Record<ToolPolicy, string> = { allow: "Always allow", ask: "Ask first", off: "Off" };
+
+function ConnectionCard({ connection, onChange, onRemove }: {
+  connection: McpConnection; onChange: (next: McpConnection) => void; onRemove: () => void;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState("");
+
+  async function run(label: string, action: () => Promise<McpConnection | void>) {
+    setBusy(label);
+    setError("");
+    try {
+      const next = await action();
+      if (next) onChange(next);
+    } catch (failure) {
+      setError(handleApiError(failure));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <li className="mcp-connection">
+      <div className="mcp-connection-head">
+        <span className="connections-icon" aria-hidden><Server size={14} /></span>
+        <span className="connections-name">
+          <strong>{connection.name}</strong>
+          <small>{connection.url}</small>
+        </span>
+        <label className="mcp-switch">
+          <input type="checkbox" checked={connection.enabled} disabled={busy !== null}
+            onChange={(event) => run("toggle", () => updateMcpConnection(connection.id, { enabled: event.target.checked }))} />
+          <span>{connection.enabled ? "On" : "Off"}</span>
+        </label>
+      </div>
+      {(error || connection.last_error) && <p className="connections-error" role="alert">{error || connection.last_error}</p>}
+      {connection.tools.length === 0 ? (
+        <p className="connections-empty">This server offers no tools.</p>
+      ) : (
+        <ul className="mcp-tools">
+          {connection.tools.map((tool) => (
+            <li key={tool.name}>
+              <span className="mcp-tool-name">
+                <strong>{tool.title}</strong>
+                <small>{tool.read_only ? "Reads only" : tool.destructive ? "Can change or delete data" : "Can make changes"}</small>
+              </span>
+              <select value={tool.policy} disabled={busy !== null} aria-label={`When Sonia may use ${tool.title}`}
+                onChange={(event) => run(`policy-${tool.name}`, () => updateMcpConnection(connection.id,
+                  { tool_policies: { [tool.name]: event.target.value as ToolPolicy } }))}>
+                {(Object.keys(POLICY_LABELS) as ToolPolicy[]).map((policy) => (
+                  <option key={policy} value={policy}>{POLICY_LABELS[policy]}</option>
+                ))}
+              </select>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="mcp-connection-actions">
+        <button type="button" className="account-secondary-button" disabled={busy !== null}
+          onClick={() => run("refresh", () => refreshMcpConnection(connection.id))}>
+          {busy === "refresh" ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Refresh tools
+        </button>
+        <button type="button" className="account-secondary-button" disabled={busy !== null}
+          onClick={() => run("remove", async () => { await deleteMcpConnection(connection.id); onRemove(); })}>
+          {busy === "remove" ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />} Remove
+        </button>
+      </div>
+    </li>
+  );
+}
+
+function AddConnectionForm({ onAdded }: { onAdded: (connection: McpConnection) => void }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [url, setUrl] = useState("");
+  const [useHeader, setUseHeader] = useState(false);
+  const [headerName, setHeaderName] = useState("Authorization");
+  const [headerValue, setHeaderValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      onAdded(await addMcpConnection({
+        name: name.trim(), url: url.trim(), auth_type: useHeader ? "header" : "none",
+        ...(useHeader && { header_name: headerName.trim(), header_value: headerValue }),
+      }));
+      setOpen(false);
+      setName(""); setUrl(""); setHeaderValue(""); setUseHeader(false);
+    } catch (failure) {
+      setError(handleApiError(failure));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <button type="button" className="account-secondary-button" onClick={() => setOpen(true)}>
+        <Plus size={13} /> Add a server
+      </button>
+    );
+  }
+  return (
+    <form className="mcp-add-form" onSubmit={submit}>
+      <label><span>Name</span>
+        <input value={name} onChange={(event) => setName(event.target.value)} required maxLength={60} placeholder="My notes" />
+      </label>
+      <label><span>Server URL</span>
+        <input value={url} onChange={(event) => setUrl(event.target.value)} required type="url" inputMode="url"
+          placeholder="https://example.com/mcp" />
+      </label>
+      <label className="mcp-check">
+        <input type="checkbox" checked={useHeader} onChange={(event) => setUseHeader(event.target.checked)} />
+        <span>The server needs an API key or token</span>
+      </label>
+      {useHeader && (
+        <div className="mcp-header-fields">
+          <label><span>Header</span>
+            <input value={headerName} onChange={(event) => setHeaderName(event.target.value)} required pattern="[A-Za-z0-9-]+" />
+          </label>
+          <label><span>Value</span>
+            <input value={headerValue} onChange={(event) => setHeaderValue(event.target.value)} required type="password"
+              autoComplete="off" placeholder="Bearer …" />
+          </label>
+        </div>
+      )}
+      <p className="connections-empty">Sonia connects now to check the server and list its tools. Keys are stored encrypted.</p>
+      {error && <p className="connections-error" role="alert">{error}</p>}
+      <div className="mcp-connection-actions">
+        <button type="button" className="account-secondary-button" onClick={() => setOpen(false)} disabled={busy}>Cancel</button>
+        <button type="submit" className="account-save-button" disabled={busy}>
+          {busy && <Loader2 size={14} className="animate-spin" />} {busy ? "Connecting…" : "Connect"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/** Remote MCP servers whose tools Sonia may use while answering. */
+function SoniasConnections() {
+  const [connections, setConnections] = useState<McpConnection[] | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    listMcpConnections().then(setConnections).catch((failure) => setError(handleApiError(failure)));
+  }, []);
+
+  return (
+    <section className="connections-block" aria-labelledby="sonias-connections">
+      <h4 id="sonias-connections">Tools Sonia can use</h4>
+      <p className="account-section-copy">
+        Connect a remote MCP server and Sonia can use its tools while answering. Tools that only read run on
+        their own; anything that can make changes asks you first.
+      </p>
+      {error && <p className="connections-error" role="alert">{error}</p>}
+      {connections === null && !error ? (
+        <p className="connections-empty"><Loader2 size={14} className="animate-spin" /> Loading connections…</p>
+      ) : (
+        <ul className="connections-list">
+          {(connections ?? []).map((connection) => (
+            <ConnectionCard key={connection.id} connection={connection}
+              onChange={(next) => setConnections((list) => (list ?? []).map((c) => (c.id === next.id ? next : c)))}
+              onRemove={() => setConnections((list) => (list ?? []).filter((c) => c.id !== connection.id))} />
+          ))}
+        </ul>
+      )}
+      <AddConnectionForm onAdded={(connection) => setConnections((list) => [...(list ?? []), connection])} />
+    </section>
+  );
+}
+
 export function ConnectionsPanel() {
   return (
     <>
       <h3>Connections</h3>
+      <SoniasConnections />
       <AppsUsingSonia />
     </>
   );

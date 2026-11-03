@@ -48,6 +48,16 @@ class SavedImage(BaseModel):
     url_expires_in: int = 900
 
 
+class SavedToolCall(BaseModel):
+    """A tool Sonia used for an answer, as shown in chat (arguments aren't kept)."""
+    id: str = Field(max_length=100)
+    server: str = Field(max_length=100)
+    tool: str = Field(max_length=200)
+    title: str = Field("", max_length=200)
+    status: Literal["awaiting_approval", "running", "done", "error", "denied"]
+    summary: str | None = Field(None, max_length=500)
+
+
 class SavedMessage(BaseModel):
     id: str = Field(max_length=100)
     content: str = Field(max_length=100_000)
@@ -55,6 +65,7 @@ class SavedMessage(BaseModel):
     error: bool = False
     notice: str | None = Field(None, max_length=2000)
     images: list[SavedImage] = Field(default_factory=list, max_length=25)
+    tool_calls: list[SavedToolCall] = Field(default_factory=list, max_length=30)
 
 
 class ConversationInput(BaseModel):

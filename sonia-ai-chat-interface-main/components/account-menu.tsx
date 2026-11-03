@@ -95,7 +95,7 @@ export function AccountMenu({ userId, email, initialName, onSignOut, onPreferenc
           {avatar()}<span><strong>{displayName}</strong><small>{email}</small></span><ChevronRight size={16} />
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        {sections.slice(0, 3).map(item => <DropdownMenuItem key={item.id} onSelect={() => open(item.id)}><item.icon size={18} />{item.title}</DropdownMenuItem>)}
+        {sections.slice(0, 4).map(item => <DropdownMenuItem key={item.id} onSelect={() => open(item.id)}><item.icon size={18} />{item.title}</DropdownMenuItem>)}
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => open("help")}><HelpCircle size={18} />Help<ChevronRight size={15} className="account-menu-chevron" /></DropdownMenuItem>
         <DropdownMenuSeparator />

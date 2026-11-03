@@ -26,8 +26,9 @@ import { Brand, Emblem } from "@/components/brand";
 import { AccountMenu } from "@/components/account-menu";
 import { DocumentImageGallery } from "@/components/document-image";
 import { MarkdownMessage } from "@/components/markdown-message";
+import { ToolCalls } from "@/components/tool-calls";
 import { streamMessage, uploadPDF, deleteConversation, handleApiError, type ImageAttachment,
-  type ChatMessage as Message } from "@/lib/api";
+  type ChatMessage as Message, type ToolCall } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import { useSession } from "@/lib/use-session";
 import { useConversations } from "@/lib/use-conversations";
@@ -123,22 +124,34 @@ export default function SoniaChatInterface() {
     const answerId = crypto.randomUUID();
     let meta: { images?: ImageAttachment[]; image_notice?: string | null } = {};
     let text = "";
+    let started = false;
+    let toolCalls: ToolCall[] = [];
     const update = (changes: Partial<Message>) =>
       setSessions((previous) => previous.map((session) => session.id === id
         ? { ...session, messages: session.messages.map((m) => (m.id === answerId ? { ...m, ...changes } : m)) }
         : session));
     try {
+      // The first words or tool step replace the "thinking" indicator with the answer itself.
+      const start = () => {
+        if (started) return;
+        started = true;
+        setPending(null);
+        append(id, { id: answerId, content: "", sender: "bot", streaming: true,
+                     images: meta.images, notice: meta.image_notice });
+      };
       const { cutOff } = await streamMessage(query, current?.documentIds ?? [], {
         onMeta: (received) => { meta = received; },
         onDelta: (piece) => {
-          if (!text) {
-            // The first words replace the "thinking" indicator with the answer itself.
-            setPending(null);
-            append(id, { id: answerId, content: "", sender: "bot", streaming: true,
-                         images: meta.images, notice: meta.image_notice });
-          }
+          start();
           text += piece;
           update({ content: text });
+        },
+        onToolCall: (call) => {
+          start();
+          const index = toolCalls.findIndex((item) => item.id === call.id);
+          toolCalls = index < 0 ? [...toolCalls, call]
+            : toolCalls.map((item, i) => (i === index ? { ...item, ...call } : item));
+          update({ tool_calls: toolCalls });
         },
       });
       update({
@@ -146,7 +159,7 @@ export default function SoniaChatInterface() {
         ...(cutOff && { notice: "The answer was cut off part-way. Ask again to get the rest." }),
       });
     } catch (error) {
-      if (text) {
+      if (started) {
         update({ streaming: false, notice: "The answer was cut off part-way. Ask again to get the rest." });
       } else {
         append(id, {
@@ -482,6 +495,7 @@ export default function SoniaChatInterface() {
                         {message.sender === "bot" && <Emblem />}
                         {message.sender === "bot" ? "SONIA" : "YOU"}
                       </div>
+                      {message.sender === "bot" && <ToolCalls calls={message.tool_calls} />}
                       {message.sender === "bot" && !message.error
                         ? <MarkdownMessage content={message.content} streaming={message.streaming} />
                         : <p>{message.content}</p>}
