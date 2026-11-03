@@ -1,11 +1,11 @@
 .studio-site {
-  --paper: #f0eadc;
-  --ink: #262a23;
-  --orange: #b9412b;
-  --olive: #82765d;
-  --line: #cfc7b5;
-  background: #f0eadc;
-  color: #262a23;
+  --paper: #f7f4ed;
+  --ink: #242021;
+  --orange: #30302e;
+  --olive: #657a64;
+  --line: #e2dcd3;
+  background: #f7f4ed;
+  color: #242021;
 }
 .studio-site::before {
   content: none;

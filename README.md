@@ -180,3 +180,9 @@ Backend tests use generated PDFs and mock the model, parser service, database an
 
 ---
 
+
+## Account profile and avatars
+
+The chat sidebar includes Profile, Personalization, Settings, Help and Log out. Display name, private bio, reduced motion and compact conversation preferences are stored in the account-owned `user_profiles` table. `GET /profile` and `PUT /profile` use the same Supabase Bearer authentication as conversations; the owner is derived from the verified token.
+
+`POST /profile/avatar` accepts JPEG, PNG or WebP up to 5 MB and 16 megapixels. Images are decoded, oriented, cropped to 512×512, stripped of metadata and encoded as WebP. The existing R2 configuration is reused; objects are private under `users/{user_id}/profile/avatars/{unique_id}.webp`. Only the object key is persisted. The frontend receives a temporary signed URL and renews it before expiry. Replacing or removing an avatar cleans up the previous object; failed database writes clean up the new upload. `DELETE /profile/avatar` removes the current photo without changing other profile details. Run `python -m app.init_db` for the additive table, or let it initialize on the first profile request.

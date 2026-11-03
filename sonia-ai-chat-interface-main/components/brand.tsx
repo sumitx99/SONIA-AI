@@ -8,19 +8,9 @@ export function Emblem({ className = "" }: { className?: string }) {
       fill="none"
       aria-hidden="true"
     >
-      {[0, 45, 90, 135].map((angle) => (
-        <ellipse
-          key={angle}
-          cx="40"
-          cy="40"
-          rx="15"
-          ry="35"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          transform={`rotate(${angle} 40 40)`}
-        />
-      ))}
-      <circle cx="40" cy="40" r="5" fill="currentColor" />
+      <path className="sonia-fold sonia-fold-top" d="M20 13H66L50 29H36L20 45V13Z" fill="currentColor" />
+      <path className="sonia-fold sonia-fold-bottom" d="M60 67H14L30 51H44L60 35V67Z" fill="currentColor" />
+      <path className="sonia-fold-seam" d="M25 39L55 41" stroke="currentColor" strokeWidth="1" opacity="0.35" />
     </svg>
   );
 }

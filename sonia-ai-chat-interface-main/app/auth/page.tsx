@@ -17,28 +17,20 @@ const copy: Record<Mode, { eyebrow: string; title: [string, string]; submit: str
   reset: { eyebrow: "ALMOST THERE.", title: ["Choose a", "new password."], submit: "Save new password" },
 };
 
-const ORBITS = [0, 45, 90, 135];
-// One loop around an orbit (rx 15, ry 35) before that orbit is rotated into place.
-const ORBIT_PATH = "M40 5 a15 35 0 1 1 0 70 a15 35 0 1 1 0 -70";
-
-/** The Sonia atom: orbits draw in, the atom turns slowly and electrons travel the orbits. */
-function AnimatedAtom() {
+/** A moving stack of source pages, built around the folded-page identity. */
+function AnimatedPages() {
   return (
-    <svg className="art-atom" viewBox="0 0 80 80" fill="none" aria-hidden="true">
-      <g className="art-atom-spin">
-        {ORBITS.map((angle, index) => (
-          <g key={angle} transform={`rotate(${angle} 40 40)`}>
-            <ellipse cx="40" cy="40" rx="15" ry="35" stroke="currentColor" strokeWidth="1.5"
-              pathLength={1} className="art-orbit" style={{ animationDelay: `${0.7 + index * 0.12}s` }} />
-            <circle r="1.6" fill="currentColor" className="art-electron">
-              <animateMotion dur={`${6 + index * 1.5}s`} begin={`${1.6 + index * 0.3}s`}
-                repeatCount="indefinite" path={ORBIT_PATH} />
-            </circle>
-          </g>
-        ))}
-      </g>
-      <circle cx="40" cy="40" r="5" fill="currentColor" className="art-nucleus" />
-    </svg>
+    <div className="source-sculpture" aria-hidden="true">
+      <span className="source-sheet source-sheet-back" />
+      <span className="source-sheet source-sheet-middle" />
+      <span className="source-sheet source-sheet-front">
+        <Emblem />
+        <span className="source-sheet-line" /><span className="source-sheet-line" />
+        <span className="source-sheet-line source-sheet-line-short" />
+        <span className="source-sheet-index">A NEW PERSPECTIVE / 001</span>
+      </span>
+      <span className="source-signal">SOURCE FOUND <span>↗</span></span>
+    </div>
   );
 }
 
@@ -137,7 +129,7 @@ export default function AuthPage() {
               <em style={{ animationDelay: "0.53s" }}>starts here.</em>
             </span>
           </h1>
-          <AnimatedAtom />
+          <AnimatedPages />
           <p className="art-tagline">
             <span>A thoughtful companion.</span>
             <span>A clearer way to read the room.</span>

@@ -71,12 +71,14 @@ export function SculptureStage() {
         animate={{ opacity: 1, scale: 1 }}
         transition={{ duration: 1.5, ease: [0.22, 1, 0.36, 1] }}
       >
-        <img
+        <motion.img
           src="/images/sonia-marble-mind.png"
           alt="An antique marble philosopher wrapped in a flowing red paper ribbon, with suspended manuscript pages"
           fetchPriority="high"
           width={1254}
           height={1254}
+          animate={active && inView ? { y: [0, -9, 0] } : { y: 0 }}
+          transition={{ duration: active && inView ? 7 : 0, repeat: active && inView ? Infinity : 0, ease: "easeInOut" }}
         />
       </motion.div>
       <div className="studio-orbit-label">

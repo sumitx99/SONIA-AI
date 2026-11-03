@@ -5,18 +5,18 @@ import { useId } from "react";
 // Illustrations for the three landing method cards. Drawn on a 400×300 canvas in the
 // Sonia palette; their motion lives in landing.css (.art-*), and stops for reduced motion.
 
-const INK = "#302a23";
-const LINE = "#cdbfa6";
-const PAPER = "#fffaf1";
-const RED = "#b5533a";
+const INK = "#2c2b29";
+const LINE = "#d5c8be";
+const PAPER = "#fffaf3";
+const RED = "#e14035";
 
 function Backdrop({ id }: { id: string }) {
   return (
     <>
       <defs>
         <radialGradient id={`${id}-bg`} cx="35%" cy="25%" r="90%">
-          <stop offset="0" stopColor="#f6efe2" />
-          <stop offset="1" stopColor="#e4d6bd" />
+          <stop offset="0" stopColor="#f7f1e7" />
+          <stop offset="1" stopColor="#e9dfd1" />
         </radialGradient>
         <filter id={`${id}-shadow`} x="-20%" y="-20%" width="140%" height="150%">
           <feDropShadow dx="0" dy="6" stdDeviation="7" floodColor="#5a4632" floodOpacity="0.18" />

@@ -13,11 +13,12 @@ import { LandingMotion, MotionToggle } from "@/components/landing-motion";
 import {
   SculptureStage,
   StudioHeadline,
-  ReadingManifesto,
 } from "@/components/studio-motion";
-import { GlassMethodCards } from "@/components/glass-method-cards";
+import { SourceProcess } from "@/components/source-process";
 import { HeroCursor } from "@/components/hero-cursor";
+
 import "./landing.css";
+import "./cinematic.css";
 
 export default function LandingPage() {
   return (
@@ -30,9 +31,9 @@ export default function LandingPage() {
           <header className="studio-header studio-wrap">
             <Brand light />
             <nav aria-label="Main navigation">
-              <a href="#approach">The philosophy</a>
-              <a href="#workspace">The experience</a>
-              <a href="#about">The maker</a>
+              <a href="#approach">The process</a>
+              <a href="#workspace">In action</a>
+              <a href="#about">Behind Sonia</a>
             </nav>
             <div className="studio-header-actions">
               <MotionToggle />
@@ -42,32 +43,34 @@ export default function LandingPage() {
             </div>
           </header>
           <section className="studio-hero studio-wrap">
-            {/* Only "Old soul." opens the selection box. */}
             <HeroCursor target=".studio-headline-line:first-child" />
+
             <div className="studio-hero-top">
               <span>
-                <i /> INTELLIGENCE WITH A DIFFERENT SOUL
+                <i /> A DIFFERENT KIND OF INTELLIGENCE
               </span>
-              <span>FOR THE CURIOUS / VOL. 01</span>
+              <span>DOCUMENTS. QUESTIONS. DISCOVERIES.</span>
             </div>
+            <div className="cinema-disc" aria-hidden="true" />
+            <div className="cinema-backdrop-word" aria-hidden="true">SONIA</div>
             <SculptureStage />
             <div className="studio-hero-copy">
               <StudioHeadline />
               <Reveal delay={0.25}>
                 <p>
-                  Your documents have a story.
+                  Every document holds a discovery.
                   <br />
-                  Find the part that matters.
+                  Ask the question. Find yours.
                 </p>
                 <div className="studio-hero-actions">
                   <Link
                     href="/chat"
                     className="studio-button studio-button-red"
                   >
-                    Meet your new mind <ArrowUpRight size={20} />
+                    Start exploring <ArrowUpRight size={20} />
                   </Link>
                   <a href="#workspace" className="studio-inline-link">
-                    See it in thought <span>↗</span>
+                    Watch it work <span>↗</span>
                   </a>
                 </div>
               </Reveal>
@@ -103,48 +106,25 @@ export default function LandingPage() {
         </div>
         <section id="approach" className="studio-philosophy studio-wrap">
           <Reveal className="studio-section-label">
-            <span>01 / THE PHILOSOPHY</span>
+            <span>01 / THE PROCESS</span>
             <span>LESS SEARCHING. MORE SEEING.</span>
           </Reveal>
-          <ReadingManifesto />
-          <GlassMethodCards
-            steps={[
-              {
-                n: "I",
-                label: "The pages",
-                title: "Bring the pages.",
-                art: "pages",
-                text: "The research paper. The annual report. That PDF you keep putting off. Give your documents somewhere to become useful.",
-              },
-              {
-                n: "II",
-                label: "The thread",
-                title: "Pull on a thread.",
-                art: "thread",
-                text: "Ask a question, follow a detail, find the connection. A good conversation takes you further than a search bar.",
-              },
-              {
-                n: "III",
-                label: "The clarity",
-                title: "Leave with clarity.",
-                art: "clarity",
-                text: "Answers grounded in your documents. A fresh perspective on what matters. Room for your next good idea.",
-              },
-            ]}
-          />
+          <Reveal className="method-intro">
+            <h2>Your documents.<br /><em>A new perspective.</em></h2>
+            <p>A shorter path from reading to understanding. Bring a document, follow your curiosity, and keep the source in sight.</p>
+          </Reveal>
+          <SourceProcess />
         </section>
         <section id="workspace" className="studio-experience">
           <div className="studio-wrap">
             <Reveal className="studio-section-label">
-              <span>02 / THE EXPERIENCE</span>
+              <span>02 / IN ACTION</span>
               <span>AN ILLUSTRATIVE CONVERSATION</span>
             </Reveal>
             <Reveal className="studio-demo-heading">
               <h2>
-                A meeting
-                <br />
-                of <em>minds.</em>
-                <span className="studio-heading-star">✳</span>
+                GO DEEPER.<br /><em>SEE IT CLEARER.</em>
+
               </h2>
               <p>
                 You bring the question.
@@ -197,23 +177,11 @@ export default function LandingPage() {
           </div>
         </section>
         <section id="about" className="studio-maker studio-wrap">
-          <Reveal className="studio-maker-seal">
-            <div>
-              <Emblem />
-              <span>
-                HUMAN CURIOSITY
-                <br />
-                MEETS MACHINE INTELLIGENCE
-              </span>
-            </div>
-            <span>BUILT WITH INTENTION. ALWAYS.</span>
-          </Reveal>
+          <Reveal className="maker-index"><span className="studio-micro">A PERSONAL PROJECT</span><span className="maker-monogram">S<span>.</span></span><span>Built for the questions<br />worth spending time with.</span></Reveal>
           <Reveal className="studio-maker-copy">
             <span className="studio-micro">03 / A NOTE FROM THE MAKER</span>
             <h2>
-              Made for the
-              <br />
-              <em>beautifully curious.</em>
+              BUILT FOR<br /><em>THE CURIOUS.</em>
             </h2>
             <p>
               Built by Sumit Kumar Ranjan, Sonia gives your documents a place to
@@ -233,9 +201,7 @@ export default function LandingPage() {
                 YOUR NEXT GOOD IDEA IS IN THERE.
               </span>
               <h2>
-                Go on.
-                <br />
-                <em>Open your mind.</em>
+                LESS SCROLLING.<br /><em>MORE KNOWING.</em>
               </h2>
               <Link href="/chat" className="studio-finale-link">
                 Enter the reading room{" "}

@@ -302,3 +302,35 @@ export const handleApiError = (error: unknown): string => {
   }
   return "An unexpected error occurred";
 };
+
+export interface AccountProfile {
+  display_name: string;
+  bio: string;
+  reduce_motion: boolean;
+  compact_mode: boolean;
+  avatar_url: string | null;
+  avatar_expires_at: number | null;
+}
+export type ProfileDetails = Pick<AccountProfile, "display_name" | "bio" | "reduce_motion" | "compact_mode">;
+
+export async function loadProfile(userId: string): Promise<AccountProfile> {
+  const response = await apiFetch("/profile", { cache: "no-store" }, userId);
+  if (!response.ok) throw await responseError(response);
+  return response.json();
+}
+export async function updateProfile(details: ProfileDetails, userId: string): Promise<AccountProfile> {
+  const response = await apiFetch("/profile", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(details) }, userId);
+  if (!response.ok) throw await responseError(response);
+  return response.json();
+}
+export async function uploadAvatar(file: File, userId: string): Promise<AccountProfile> {
+  const body = new FormData(); body.append("file", file);
+  const response = await apiFetch("/profile/avatar", { method: "POST", body }, userId);
+  if (!response.ok) throw await responseError(response);
+  return response.json();
+}
+export async function deleteAvatar(userId: string): Promise<AccountProfile> {
+  const response = await apiFetch("/profile/avatar", { method: "DELETE" }, userId);
+  if (!response.ok) throw await responseError(response);
+  return response.json();
+}

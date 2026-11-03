@@ -7,7 +7,6 @@ import {
   type ChangeEvent,
   type KeyboardEvent,
 } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion, MotionConfig } from "motion/react";
 import {
@@ -15,7 +14,6 @@ import {
   ArrowUpRight,
   Check,
   FileText,
-  LogOut,
   Menu,
   MessageSquare,
   Paperclip,
@@ -25,6 +23,7 @@ import {
   X,
 } from "lucide-react";
 import { Brand, Emblem } from "@/components/brand";
+import { AccountMenu } from "@/components/account-menu";
 import { DocumentImageGallery } from "@/components/document-image";
 import { MarkdownMessage } from "@/components/markdown-message";
 import { streamMessage, uploadPDF, deleteConversation, handleApiError, type ImageAttachment,
@@ -41,6 +40,7 @@ const suggestions = [
 
 export default function SoniaChatInterface() {
   const router = useRouter();
+  const [preferences, setPreferences] = useState({ reduce_motion: false, compact_mode: false });
   const { session, ready } = useSession();
   const { sessions, setSessions, loaded: historyLoaded, error: historyError,
     setError: setHistoryError, retry: retryHistory } = useConversations(session?.user.id);
@@ -266,8 +266,8 @@ export default function SoniaChatInterface() {
   }
 
   return (
-    <MotionConfig reducedMotion="user">
-      <div className="chat-app">
+    <MotionConfig reducedMotion={preferences.reduce_motion ? "always" : "user"}>
+      <div className="chat-app" data-reduce-motion={preferences.reduce_motion} data-compact={preferences.compact_mode}>
         {sidebarOpen && (
           <button
             className="sidebar-scrim"
@@ -291,7 +291,7 @@ export default function SoniaChatInterface() {
             </button>
           </div>
           <button className="button button-ink new-chat" onClick={newChat} disabled={!historyLoaded}>
-            <Plus size={16} /> A fresh conversation
+            <Plus size={16} /> New conversation
           </button>
           <div className="sidebar-section-label mono">
             YOUR CONVERSATIONS{" "}
@@ -380,26 +380,17 @@ export default function SoniaChatInterface() {
             ))}
           </div>
           <div className="sidebar-bottom">
-            <Emblem />
-            <p>
-              A little space
-              <br />
-              <em>for big ideas.</em>
-            </p>
-            <span className="mono">{!historyLoaded ? "LOADING YOUR HISTORY…" : historyError ? "LOCAL BACKUP · SYNC PENDING" : "HISTORY SAVED TO YOUR ACCOUNT"}</span>
+            <div className="sidebar-sync-status" role="status" data-sync={historyError ? "pending" : !historyLoaded ? "loading" : "saved"}>
+              <span aria-hidden="true" />
+              {!historyLoaded ? "Loading history…" : historyError ? "Sync pending" : "History synced"}
+            </div>
             {historyError && <div role="status" className="form-notice">
               <p>{historyError}</p><button type="button" className="text-link" onClick={retryHistory}>Retry sync</button>
             </div>}
-            <div className="account-user">
-              <span>Signed in as</span>
-              <strong>{session.user.email}</strong>
-              <button type="button" className="text-link" onClick={signOut}>
-                <LogOut size={14} /> Sign out
-              </button>
-            </div>
-            <Link href="/" className="sidebar-home">
-              Back to Sonia <ArrowUpRight size={14} />
-            </Link>
+            <AccountMenu key={session.user.id} userId={session.user.id}
+              email={session.user.email || ""}
+              initialName={session.user.user_metadata?.full_name || session.user.user_metadata?.name}
+              onSignOut={signOut} onPreferences={setPreferences} />
           </div>
         </aside>
         <main className="chat-main">
@@ -414,7 +405,7 @@ export default function SoniaChatInterface() {
               >
                 <Menu size={20} />
               </button>
-              <span className="room-label">The reading room</span>
+              <span className="room-label">Workspace</span>
               <span className="header-slash">/</span>
               <span className="header-title">
                 {current?.title ?? "A fresh perspective"}
@@ -436,11 +427,11 @@ export default function SoniaChatInterface() {
                 transition={{ duration: 0.5 }}
               >
                 <Emblem />
-                <p className="eyebrow">MAKE YOURSELF AT HOME.</p>
+                <p className="eyebrow">YOUR DOCUMENTS. A NEW PERSPECTIVE.</p>
                 <h1>
-                  A little room
+                  Your next insight
                   <br />
-                  <em>for clarity.</em>
+                  <em>starts here.</em>
                 </h1>
                 <p>
                   Bring the document. Ask the question.

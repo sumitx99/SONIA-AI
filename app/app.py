@@ -25,12 +25,14 @@ from app.image_storage import R2ImageStorage, document_prefix, valid_chat_id
 from app.image_db import find_document_images
 from app.image_pipeline import ingest_document_images, image_attachments
 from app.conversations import router as conversations_router
+from app.profiles import router as profiles_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Sonia Advanced RAG API")
 app.include_router(conversations_router)
+app.include_router(profiles_router)
 _upload_slots = asyncio.Semaphore(1)
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
