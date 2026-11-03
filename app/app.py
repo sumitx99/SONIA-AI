@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, UploadFile, File, Form, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import iterate_in_threadpool, run_in_threadpool
@@ -26,11 +27,47 @@ from app.image_db import find_document_images
 from app.image_pipeline import ingest_document_images, image_attachments
 from app.conversations import router as conversations_router
 from app.profiles import router as profiles_router
+from app.mcp_server.server import MCPMount, build_mcp_app
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Sonia Advanced RAG API")
+_mcp_mount = MCPMount()
+
+
+def warm_up_docling():
+    # Load Docling's layout models in the background so the first upload isn't slow.
+    import threading
+
+    if not docling_enabled():
+        return
+
+    def load():
+        try:
+            from app.docling_utils import _converter
+            _converter()
+            logger.info("Docling models loaded.")
+        except Exception:
+            logger.exception("Docling warm-up failed; uploads will fall back to PyMuPDF")
+
+    threading.Thread(target=load, daemon=True).start()
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    warm_up_docling()
+    # The MCP session manager runs once per app instance, so each lifespan gets a fresh one.
+    mcp_app = build_mcp_app()
+    async with mcp_app.router.lifespan_context(mcp_app):
+        _mcp_mount.app = mcp_app
+        try:
+            yield
+        finally:
+            _mcp_mount.app = None
+    await close_pool()
+
+
+app = FastAPI(title="Sonia Advanced RAG API", lifespan=lifespan)
 app.include_router(conversations_router)
 app.include_router(profiles_router)
 _upload_slots = asyncio.Semaphore(1)
@@ -46,30 +83,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-@app.on_event("startup")
-async def warm_up_docling():
-    # Load Docling's layout models in the background so the first upload isn't slow.
-    import threading
-    from app.docling_utils import _converter
-
-    if not docling_enabled():
-        return
-
-    def load():
-        try:
-            _converter()
-            logger.info("Docling models loaded.")
-        except Exception:
-            logger.exception("Docling warm-up failed; uploads will fall back to PyMuPDF")
-
-    threading.Thread(target=load, daemon=True).start()
-
-
-@app.on_event("shutdown")
-async def close_database_pool():
-    await close_pool()
-
 
 @app.get("/", tags=["General"])
 async def root():
@@ -333,3 +346,8 @@ async def get_image(document_id: int, image_id: str, user_id: str = Depends(curr
     if not results:
         raise HTTPException(status_code=404, detail="Image not found in this document")
     return image_attachments(results, storage)[0]
+
+
+# MCP for Claude, Cursor and other clients: /mcp and its OAuth metadata at
+# /.well-known/oauth-protected-resource/mcp. Mounted last so the API's own routes match first.
+app.mount("/", _mcp_mount)

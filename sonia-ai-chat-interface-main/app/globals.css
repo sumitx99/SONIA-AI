@@ -3383,3 +3383,93 @@ h2 {
   .hero-cursor-box, .hero-cursor-handle { transition: none; }
 }
 
+
+/* OAuth consent (an app such as Claude connecting to Sonia over MCP) */
+.consent-page {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 32px 16px 48px;
+  background: var(--paper);
+}
+.consent-brand {
+  align-self: flex-start;
+  margin-bottom: clamp(32px, 10vh, 90px);
+}
+.consent-card {
+  width: 100%;
+  max-width: 460px;
+  padding: 36px 32px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fcf8ef;
+  box-shadow: 0 24px 48px -32px rgb(48 42 35 / 0.35);
+}
+.consent-card > svg {
+  width: 40px;
+  height: 40px;
+  color: var(--orange);
+  margin-bottom: 20px;
+}
+.consent-card .eyebrow {
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  color: #8a7e6c;
+}
+.consent-card h1 {
+  margin: 12px 0 18px;
+  font-family: var(--font-editorial), Georgia, serif;
+  font-size: clamp(28px, 6vw, 36px);
+  font-weight: 500;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+.consent-card h1 strong { font-weight: 600; }
+.consent-account,
+.consent-note,
+.consent-loading {
+  font-size: 13px;
+  line-height: 1.7;
+  color: #5c5245;
+  overflow-wrap: anywhere;
+}
+.consent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 20px 0;
+  padding: 16px;
+  border-radius: 6px;
+  background: #f3ecdf;
+  font-size: 13px;
+}
+.consent-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.consent-list svg {
+  flex: none;
+  margin-top: 3px;
+  color: var(--orange);
+}
+.consent-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 24px;
+}
+.consent-actions .button {
+  justify-content: center;
+  gap: 8px;
+  border-color: var(--line);
+}
+.consent-actions .button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+  transform: none;
+}
+@media (max-width: 480px) {
+  .consent-card { padding: 28px 20px; }
+}

@@ -180,3 +180,30 @@ async def get_document_source(document_id, user_id):
     if not row:
         return None
     return {"file": bytes(row["file"]) if row["file"] is not None else None, "source_key": row["source_key"]}
+
+
+async def list_user_documents(user_id, limit=100):
+    """The user's documents, newest first."""
+    await ensure_document_schema()
+    async with (await get_pool()).acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, filename, chat_id, uploaded_at FROM documents WHERE user_id = $1 "
+            "ORDER BY uploaded_at DESC, id DESC LIMIT $2", user_id, limit)
+    return [{"id": row["id"], "filename": row["filename"], "chat_id": row["chat_id"],
+             "uploaded_at": row["uploaded_at"].isoformat() if row["uploaded_at"] else None} for row in rows]
+
+
+async def search_document_chunks(query_embedding, document_ids, top_k=5):
+    """Like search_embeddings, but says which document each passage came from.
+
+    `document_ids` must already be limited to what the caller may see; [] finds nothing.
+    """
+    if not document_ids:
+        return []
+    async with (await get_pool()).acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT c.document_id, d.filename, c.chunk_text FROM document_chunks c "
+            "JOIN documents d ON d.id = c.document_id WHERE c.document_id = ANY($2::int[]) "
+            "ORDER BY c.embedding <-> $1 LIMIT $3", query_embedding, list(document_ids), top_k)
+    return [{"document_id": row["document_id"], "filename": row["filename"], "text": row["chunk_text"]}
+            for row in rows]

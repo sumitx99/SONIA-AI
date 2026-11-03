@@ -18,6 +18,8 @@ services:
         value: "off"
       - key: FRONTEND_ORIGINS
         sync: false
+      - key: PUBLIC_API_URL
+        value: https://sonia-api.onrender.com
       - key: DB_NAME
         value: postgres
       - key: DB_USER
