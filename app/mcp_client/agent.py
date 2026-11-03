@@ -17,6 +17,7 @@ from fastapi.concurrency import iterate_in_threadpool
 
 from app.llm import stream_gemini_parts, user_turn
 from app.mcp_client import store
+from app.mcp_client.oauth import provider_for
 from app.mcp_client.session import call_tool, open_session
 
 logger = logging.getLogger(__name__)
@@ -66,9 +67,10 @@ async def available_tools(user_id: str) -> tuple[list[dict], dict]:
     return declarations, registry
 
 
-async def _run_tool(connection: dict, tool: dict, arguments: dict) -> tuple[str, bool]:
+async def _run_tool(user_id: str, connection: dict, tool: dict, arguments: dict) -> tuple[str, bool]:
     try:
-        async with open_session(connection) as session:
+        auth = provider_for(user_id, connection) if connection["auth_type"] == "oauth" else None
+        async with open_session(connection, auth) as session:
             return await call_tool(session, tool["name"], arguments)
     except Exception as error:
         logger.info("Tool %s on %s failed: %r", tool["name"], connection["url"], error)
@@ -118,7 +120,7 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
                     yield "tool_call", {**event, "status": "denied"}
                 else:
                     yield "tool_call", {**event, "status": "running"}
-                    text, is_error = await _run_tool(connection, tool, arguments)
+                    text, is_error = await _run_tool(user_id, connection, tool, arguments)
                     yield "tool_call", {**event, "status": "error" if is_error else "done",
                                         "summary": text[:280]}
             response = {"name": name, "response": {

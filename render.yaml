@@ -20,6 +20,9 @@ services:
         sync: false
       - key: PUBLIC_API_URL
         value: https://sonia-api.onrender.com
+      # Encrypts users' MCP connection secrets; set once and keep it (Fernet key).
+      - key: MCP_SECRET_KEY
+        sync: false
       - key: DB_NAME
         value: postgres
       - key: DB_USER

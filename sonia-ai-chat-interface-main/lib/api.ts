@@ -409,3 +409,13 @@ export const updateMcpConnection = (id: string, changes: { name?: string; enable
 
 export const deleteMcpConnection = (id: string) =>
   connectionsRequest<void>(`/${id}`, { method: "DELETE" });
+
+// Sign in to an MCP server that uses OAuth: open `authorization_url`, then poll the status.
+export const startMcpOAuth = (input: { name: string; url: string }) =>
+  connectionsRequest<{ flow_id: string; authorization_url: string }>("/oauth/start", {
+    method: "POST", body: JSON.stringify(input),
+  });
+
+export const mcpOAuthStatus = (flowId: string) =>
+  connectionsRequest<{ status: "pending" | "done" | "error"; error: string | null; connection?: McpConnection }>(
+    `/oauth/status/${encodeURIComponent(flowId)}`);

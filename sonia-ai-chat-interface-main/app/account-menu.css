@@ -133,4 +133,6 @@
 .mcp-add-form .mcp-check { flex-direction:row; align-items:center; gap:8px; }
 .mcp-header-fields { display:grid; grid-template-columns:minmax(0, 1fr) minmax(0, 2fr); gap:8px; }
 @media (max-width:520px) { .mcp-header-fields { grid-template-columns:1fr; } }
+.mcp-auth-choice { display:flex; flex-direction:column; gap:6px; margin:0; padding:0; border:0; }
+.mcp-auth-choice legend { margin-bottom:4px; font-size:11px; color:#666; }
 

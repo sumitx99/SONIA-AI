@@ -21,6 +21,8 @@ agent = importlib.import_module("app.mcp_client.agent")
 connections = importlib.import_module("app.mcp_client.connections")
 safety = importlib.import_module("app.mcp_client.safety")
 store = importlib.import_module("app.mcp_client.store")
+oauth = importlib.import_module("app.mcp_client.oauth")
+session_module = importlib.import_module("app.mcp_client.session")
 
 
 def resolving_to(*addresses):
@@ -205,6 +207,50 @@ class ConnectionsAPITests(unittest.TestCase):
     def test_unknown_approval_is_404(self):
         response = self.client.post("/chat/approvals/nope", json={"approve": True})
         self.assertEqual(response.status_code, 404)
+
+
+class OAuthFlowTests(unittest.TestCase):
+    def test_unknown_state_is_ignored_and_callback_page_is_escaped(self):
+        client = TestClient(backend.app)
+        page = client.get("/mcp-connections/oauth/callback", params={"state": "nope", "code": "c"})
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("expired", page.text)
+
+        async def main():
+            flow = oauth.Flow("user-1", "<img src=x onerror=alert(1)>", "https://mcp.example.com/mcp")
+            oauth._flows["state-1"] = flow
+            return flow
+        flow = asyncio.run(main())
+        try:
+            self.assertIsNone(oauth.finish_flow("other-state", "code", None, None))
+            self.assertIsNone(oauth.flow_status("intruder", "state-1"))
+            self.assertEqual(oauth.flow_status("user-1", "state-1")["status"], "pending")
+            with patch.object(oauth, "finish_flow", return_value=flow):
+                page = client.get("/mcp-connections/oauth/callback", params={"state": "state-1", "code": "c"})
+            self.assertNotIn("<img", page.text)
+            self.assertIn("&lt;img", page.text)
+        finally:
+            oauth._flows.pop("state-1", None)
+
+    def test_tokens_are_kept_in_the_connection_secret(self):
+        from mcp.shared.auth import OAuthToken
+        storage = oauth.SecretStorage({"client_info": {"client_id": "abc", "redirect_uris": ["https://x/cb"]}})
+
+        async def main():
+            await storage.set_tokens(OAuthToken(access_token="tok", token_type="Bearer", expires_in=60))
+            return await storage.get_tokens(), await storage.get_client_info()
+        tokens, info = asyncio.run(main())
+        self.assertEqual((tokens.access_token, info.client_id), ("tok", "abc"))
+        self.assertEqual(storage.secret["tokens"]["access_token"], "tok")
+
+    def test_every_outgoing_request_is_checked(self):
+        import httpx2
+
+        async def main():
+            await session_module._guard_request(httpx2.Request("GET", "https://169.254.169.254/latest/meta-data"))
+        with patch.dict(os.environ, {"MCP_ALLOW_PRIVATE_URLS": "false"}), resolving_to("169.254.169.254"), \
+             self.assertRaises(safety.UnsafeURLError):
+            asyncio.run(main())
 
 
 if __name__ == "__main__":

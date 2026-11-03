@@ -10,7 +10,7 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.shared._httpx_utils import create_mcp_http_client
 import mcp.types as types
 
-from app.mcp_client.safety import assert_public_url
+from app.mcp_client.safety import UnsafeURLError, assert_public_url
 
 CONNECT_TIMEOUT = 20
 CALL_TIMEOUT = 30
@@ -32,10 +32,20 @@ async def open_session(connection: dict, auth: httpx2.Auth | None = None):
     url = await assert_public_url(connection["url"])
     timeout = httpx2.Timeout(CONNECT_TIMEOUT, read=CALL_TIMEOUT)
     async with create_mcp_http_client(headers=_headers(connection), timeout=timeout, auth=auth) as http:
+        # Every request is checked, not just the first: OAuth discovery and token endpoints
+        # come from the server's metadata and could otherwise point at internal addresses.
+        http.event_hooks["request"].append(_guard_request)
         async with streamable_http_client(url, http_client=http) as (read, write):
             async with ClientSession(read, write, client_info=CLIENT_INFO) as session:
                 await asyncio.wait_for(session.initialize(), CONNECT_TIMEOUT)
                 yield session
+
+
+async def _guard_request(request: httpx2.Request) -> None:
+    try:
+        await assert_public_url(str(request.url))
+    except UnsafeURLError as error:
+        raise UnsafeURLError(f"Blocked a request to {request.url.host}: {error}") from None
 
 
 def describe_tool(tool: types.Tool) -> dict:

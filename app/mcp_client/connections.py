@@ -1,14 +1,17 @@
 """/mcp-connections: the remote MCP servers a user lets Sonia use in chat."""
 
+import html
 import logging
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from app.auth import current_user
 from app.mcp_client import store
-from app.mcp_client.safety import UnsafeURLError
+from app.mcp_client import oauth
+from app.mcp_client.safety import UnsafeURLError, assert_public_url
 from app.mcp_client.session import fetch_tools
 
 logger = logging.getLogger(__name__)
@@ -29,16 +32,22 @@ class ConnectionUpdate(BaseModel):
     tool_policies: dict[str, Literal["allow", "ask", "off"]] | None = None
 
 
-async def _tools_or_400(connection: dict) -> list[dict]:
+class OAuthStart(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    url: str = Field(min_length=8, max_length=2048)
+
+
+async def _tools_or_400(connection: dict, user_id: str | None = None) -> list[dict]:
     try:
-        return await fetch_tools(connection)
+        auth = oauth.provider_for(user_id, connection) if connection["auth_type"] == "oauth" else None
+        return await fetch_tools(connection, auth)
     except UnsafeURLError as error:
         raise HTTPException(status_code=400, detail=str(error))
     except Exception as error:
         logger.info("MCP server %s unreachable: %r", connection["url"], error)
         raise HTTPException(status_code=400, detail=(
-            "Couldn't connect to that MCP server. Check the URL and credentials, "
-            "and that it supports Streamable HTTP."))
+            "Couldn't connect to that MCP server. Check the URL and credentials, and that it "
+            "supports Streamable HTTP. If it asks you to sign in, choose “Sign in with the service”."))
 
 
 def _public(connection: dict) -> dict:
@@ -69,13 +78,60 @@ async def add_mcp_connection(payload: ConnectionInput, user_id: str = Depends(cu
                                          payload.auth_type, secret, tools)
 
 
+@router.post("/oauth/start")
+async def start_oauth_connection(payload: OAuthStart, user_id: str = Depends(current_user)):
+    """Starts signing in to an MCP server; the browser opens `authorization_url`."""
+    if await store.count_connections(user_id) >= store.MAX_CONNECTIONS:
+        raise HTTPException(status_code=400, detail=f"You can add up to {store.MAX_CONNECTIONS} connections.")
+    try:
+        url = await assert_public_url(payload.url)
+        store.encrypt_secret({"check": True})
+    except UnsafeURLError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    except store.SecretKeyMissing as error:
+        raise HTTPException(status_code=503, detail=str(error))
+    try:
+        flow_id, authorization_url = await oauth.start_flow(user_id, payload.name.strip(), url)
+    except Exception as error:
+        logger.info("Couldn't start OAuth for %s: %r", url, error)
+        raise HTTPException(status_code=400, detail=(
+            "That server didn't offer an OAuth sign-in. Try connecting it with an API key instead."))
+    return {"flow_id": flow_id, "authorization_url": authorization_url}
+
+
+@router.get("/oauth/status/{flow_id}")
+async def oauth_connection_status(flow_id: str, user_id: str = Depends(current_user)):
+    status = oauth.flow_status(user_id, flow_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail="This sign-in has expired. Please start again.")
+    return status
+
+
+@router.get(oauth.CALLBACK_PATH.removeprefix("/mcp-connections"), response_class=HTMLResponse,
+            include_in_schema=False)
+async def oauth_connection_callback(state: str = "", code: str | None = None, error: str | None = None,
+                                    iss: str | None = None):
+    """Where the MCP server's sign-in sends the browser back. No Sonia login: `state` binds it."""
+    flow = oauth.finish_flow(state, code, error, iss)
+    if flow is None:
+        message = "This sign-in link has expired. Start again from Sonia’s Settings › Connections."
+    elif error:
+        message = "Sign-in was cancelled. You can close this window."
+    else:
+        message = f"Connecting {html.escape(flow.name)} to Sonia… You can close this window."
+    return HTMLResponse(
+        "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'>"
+        "<title>Sonia</title><body style='font:15px system-ui;padding:40px;color:#302a23;background:#f4eddf'>"
+        f"<p>{message}</p><script>setTimeout(function(){{window.close()}},1500)</script>")
+
+
 @router.post("/{connection_id}/refresh")
 async def refresh_mcp_connection(connection_id: str, user_id: str = Depends(current_user)):
     connection = await store.get_connection(user_id, connection_id, with_secret=True)
     if not connection:
         raise HTTPException(status_code=404, detail="Connection not found")
     try:
-        tools = await _tools_or_400(connection)
+        tools = await _tools_or_400(connection, user_id)
     except HTTPException as error:
         await store.update_connection(user_id, connection_id, last_error=error.detail)
         raise

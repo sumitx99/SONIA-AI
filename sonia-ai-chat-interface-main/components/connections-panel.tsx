@@ -5,8 +5,8 @@ import { Loader2, Plug, Plus, RefreshCw, Server, Trash2, Unplug } from "lucide-r
 import type { OAuthGrant } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import {
-  addMcpConnection, deleteMcpConnection, handleApiError, listMcpConnections, refreshMcpConnection,
-  updateMcpConnection, type McpConnection, type ToolPolicy,
+  addMcpConnection, deleteMcpConnection, handleApiError, listMcpConnections, mcpOAuthStatus,
+  refreshMcpConnection, startMcpOAuth, updateMcpConnection, type McpConnection, type ToolPolicy,
 } from "@/lib/api";
 
 const MCP_URL = `${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").trim().replace(/\/+$/, "")}/mcp`;
@@ -144,7 +144,8 @@ function AddConnectionForm({ onAdded }: { onAdded: (connection: McpConnection) =
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
-  const [useHeader, setUseHeader] = useState(false);
+  const [auth, setAuth] = useState<"none" | "header" | "oauth">("none");
+  const useHeader = auth === "header";
   const [headerName, setHeaderName] = useState("Authorization");
   const [headerValue, setHeaderValue] = useState("");
   const [busy, setBusy] = useState(false);
@@ -154,13 +155,40 @@ function AddConnectionForm({ onAdded }: { onAdded: (connection: McpConnection) =
     event.preventDefault();
     setBusy(true);
     setError("");
+    if (auth === "oauth") {
+      // Open the window now, while the click still counts as a user gesture (popup blockers).
+      const popup = window.open("about:blank", "sonia-mcp-signin", "width=520,height=720");
+      try {
+        const { flow_id, authorization_url } = await startMcpOAuth({ name: name.trim(), url: url.trim() });
+        if (popup) popup.location.href = authorization_url; else window.open(authorization_url, "_blank");
+        const deadline = Date.now() + 10 * 60 * 1000;
+        while (Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          const status = await mcpOAuthStatus(flow_id);
+          if (status.status === "done" && status.connection) {
+            onAdded(status.connection);
+            setOpen(false);
+            setName(""); setUrl(""); setAuth("none");
+            return;
+          }
+          if (status.status === "error") throw new Error(status.error || "Signing in didn’t complete");
+        }
+        throw new Error("Signing in took too long. Please try again.");
+      } catch (failure) {
+        popup?.close();
+        setError(handleApiError(failure));
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     try {
       onAdded(await addMcpConnection({
         name: name.trim(), url: url.trim(), auth_type: useHeader ? "header" : "none",
         ...(useHeader && { header_name: headerName.trim(), header_value: headerValue }),
       }));
       setOpen(false);
-      setName(""); setUrl(""); setHeaderValue(""); setUseHeader(false);
+      setName(""); setUrl(""); setHeaderValue(""); setAuth("none");
     } catch (failure) {
       setError(handleApiError(failure));
     } finally {
@@ -184,10 +212,16 @@ function AddConnectionForm({ onAdded }: { onAdded: (connection: McpConnection) =
         <input value={url} onChange={(event) => setUrl(event.target.value)} required type="url" inputMode="url"
           placeholder="https://example.com/mcp" />
       </label>
-      <label className="mcp-check">
-        <input type="checkbox" checked={useHeader} onChange={(event) => setUseHeader(event.target.checked)} />
-        <span>The server needs an API key or token</span>
-      </label>
+      <fieldset className="mcp-auth-choice">
+        <legend>How does the server sign you in?</legend>
+        {([["none", "No sign-in"], ["header", "API key or token"], ["oauth", "Sign in with the service (OAuth)"]] as const)
+          .map(([value, label]) => (
+            <label key={value} className="mcp-check">
+              <input type="radio" name="mcp-auth" value={value} checked={auth === value} onChange={() => setAuth(value)} />
+              <span>{label}</span>
+            </label>
+          ))}
+      </fieldset>
       {useHeader && (
         <div className="mcp-header-fields">
           <label><span>Header</span>
@@ -204,7 +238,8 @@ function AddConnectionForm({ onAdded }: { onAdded: (connection: McpConnection) =
       <div className="mcp-connection-actions">
         <button type="button" className="account-secondary-button" onClick={() => setOpen(false)} disabled={busy}>Cancel</button>
         <button type="submit" className="account-save-button" disabled={busy}>
-          {busy && <Loader2 size={14} className="animate-spin" />} {busy ? "Connecting…" : "Connect"}
+          {busy && <Loader2 size={14} className="animate-spin" />}
+          {busy ? (auth === "oauth" ? "Waiting for sign-in…" : "Connecting…") : auth === "oauth" ? "Sign in" : "Connect"}
         </button>
       </div>
     </form>
