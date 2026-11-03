@@ -16,7 +16,9 @@ import uuid
 
 from fastapi.concurrency import iterate_in_threadpool
 
-from app.services.llm import stream_gemini_parts, user_turn
+from app.services.llm import stream_gemini_parts, conversation_turns, GeminiSearchUnavailable
+from app.services.web_search import needs_web
+from app.services.web_activity import WebActivity, safe_url
 from app.mcp_client import store
 from app.mcp_client.oauth import provider_for
 from app.mcp_client.session import call_tool, open_session
@@ -83,27 +85,71 @@ def _add_sources(grounding: dict, sources: dict) -> None:
     for chunk in grounding.get("groundingChunks") or []:
         web = chunk.get("web") or {}
         url = web.get("uri") or ""
-        if url.startswith(("https://", "http://")) and url not in sources and len(sources) < MAX_SOURCES:
+        if safe_url(url) and url not in sources and len(sources) < MAX_SOURCES:
             sources[url] = {"title": (web.get("title") or url)[:200], "url": url[:2048]}
 
 
-async def answer_with_tools(user_id: str, query: str, context: str, declarations: list, registry: dict):
+async def answer_with_tools(user_id: str, query: str, context: str, declarations: list, registry: dict, history=None):
     """Yields (event, data) while answering; text arrives as "delta" events."""
-    contents = [user_turn(query, context)]
+    contents = conversation_turns(query, context, history)
     sources: dict[str, dict] = {}
+    web = WebActivity()
     for round_number in range(MAX_ROUNDS + 1):
         # The last round offers no tools, so the model has to answer with what it has.
         offered = declarations if round_number < MAX_ROUNDS else []
         model_parts, calls = [], []
-        async for part in iterate_in_threadpool(stream_gemini_parts(contents, offered)):
-            if "groundingMetadata" in part:
-                _add_sources(part["groundingMetadata"], sources)
-                continue
-            model_parts.append(part)
-            if "functionCall" in part:
-                calls.append(part["functionCall"])
-            elif part.get("text") and not part.get("thought"):
-                yield "delta", {"text": part["text"]}
+        try:
+            async for part in iterate_in_threadpool(stream_gemini_parts(contents, offered)):
+                if "webStatus" in part:
+                    for event in web.finish(failed=True):
+                        yield "tool_call", event
+                    yield "tool_call", {"id": "web-search-unavailable", "server": "Web", "tool": "google_search",
+                                        "title": "Web search unavailable", "status": "error",
+                                        "summary": "The search-enabled request was rate-limited. Retrying without Google Search."}
+                    if needs_web(query, history):
+                        raise GeminiSearchUnavailable("Gemini search was rate-limited")
+                    continue
+                if "groundingMetadata" in part:
+                    grounding = part["groundingMetadata"]
+                    _add_sources(grounding, sources)
+                    queries = grounding.get("webSearchQueries") or []
+                    if queries and not any(call["tool"] == "google_search" for call in web.calls.values()):
+                        yield "tool_call", {"id": f"web-grounding-{round_number}", "server": "Web", "tool": "google_search",
+                                            "title": "Searched the web", "status": "done",
+                                            "arguments": {"queries": [q[:500] for q in queries[:5] if isinstance(q, str)]}}
+                    if sources:
+                        yield "sources", {"sources": list(sources.values())}
+                    continue
+                if "urlContextMetadata" in part:
+                    for index, item in enumerate(part["urlContextMetadata"].get("urlMetadata") or []):
+                        url = safe_url(item.get("retrievedUrl"))
+                        if not url:
+                            continue
+                        success = item.get("urlRetrievalStatus") == "URL_RETRIEVAL_STATUS_SUCCESS"
+                        yield "tool_call", {"id": f"web-page-{round_number}-{index}", "server": "Web", "tool": "url_context",
+                                            "title": "Read web page" if success else "Page could not be read",
+                                            "arguments": {"url": url}, "status": "done" if success else "error"}
+                        if success and len(sources) < MAX_SOURCES:
+                            sources.setdefault(url, {"title": url, "url": url})
+                    if sources:
+                        yield "sources", {"sources": list(sources.values())}
+                    continue
+                model_parts.append(part)
+                for name, response in (("toolCall", False), ("toolResponse", True)):
+                    if name in part:
+                        event = web.event(part[name], response, round_number)
+                        if event:
+                            yield "tool_call", event
+                if "functionCall" in part:
+                    calls.append(part["functionCall"])
+                elif part.get("text") and not part.get("thought"):
+                    yield "delta", {"text": part["text"]}
+        except Exception:
+            for event in web.finish(failed=True):
+                yield "tool_call", event
+            raise
+        for event in web.finish():
+            yield "tool_call", event
         if not calls:
             break
         contents.append({"role": "model", "parts": model_parts})
@@ -144,5 +190,3 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
                 response["id"] = call["id"]
             responses.append({"functionResponse": response})
         contents.append({"role": "user", "parts": responses})
-    if sources:
-        yield "sources", {"sources": list(sources.values())}

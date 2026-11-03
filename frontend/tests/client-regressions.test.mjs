@@ -122,3 +122,35 @@ test('chart JSON from the model cannot load outside content or overload the page
   assert.match(charts.parseChartSpec(JSON.stringify({ data: [{ type: 'bar', y: [1] }, { type: 'scattergeo', lat: [1], lon: [1] }] })).error, /mix map/);
   assert.match(charts.parseChartSpec('{"data": [{"type": "bar", "y": [1, 2').error, /not valid JSON/);
 });
+
+const chatContext = loadTypeScript('../lib/chat-context.ts');
+test('editing a question preserves earlier turns and replaces its continuation', () => {
+  const messages=[{id:'u1',sender:'user',content:'Compare CNN and RNN'},{id:'b1',sender:'bot',content:'Which metric?'},{id:'u2',sender:'user',content:'Accuracy'},{id:'b2',sender:'bot',content:'Old answer'}];
+  const edited=chatContext.editConversation(messages,'u2','Use sample latency');
+  assert.deepEqual(edited.before.map(m=>m.id),['u1','b1']);
+  assert.deepEqual(edited.messages.map(m=>m.id),['u1','b1','u2']);
+  assert.equal(edited.messages[2].content,'Use sample latency');
+  assert.equal(messages[2].content,'Accuracy');
+  assert.throws(()=>chatContext.editConversation(messages,'b1','Cannot edit answer'));
+});
+test('memory excludes errors, incomplete answers and image URLs, and stays bounded',()=>{
+ const result=chatContext.conversationHistory([{sender:'user',content:'Question',images:[{url:'private-url'}]},{sender:'bot',content:'Failure',error:true},{sender:'bot',content:'Incomplete',streaming:true},{sender:'bot',content:'Finished'}]);
+ assert.deepEqual(result,[{sender:'user',content:'Question'},{sender:'bot',content:'Finished'}]);
+ const bounded=chatContext.conversationHistory(Array.from({length:60},(_,i)=>({sender:i%2?'bot':'user',content:'x'.repeat(2000)})));
+ assert.ok(bounded.length<=20); assert.ok(bounded.reduce((n,m)=>n+m.content.length,0)<=24000); assert.equal(bounded[0].sender,'user');
+});
+test('streaming fallback preserves the same conversation memory and document scope',async(t)=>{
+ const calls=[]; t.mock.method(globalThis,'fetch',async(url,init)=>{calls.push([url,init.body]);return calls.length===1?response(404,{}):response(200,{answer:'Follow-up answer'});});
+ const memory=[{sender:'user',content:'Compare CNN and RNN'},{sender:'bot',content:'Need metrics'}]; let answer='';
+ await client().streamMessage('assume any no',[7],{onDelta:piece=>answer+=piece},memory);
+ assert.equal(answer,'Follow-up answer');assert.equal(calls.length,2);
+ for(const[,body] of calls){assert.deepEqual(JSON.parse(body.get('history')),memory);assert.deepEqual(body.getAll('document_ids'),['7']);}
+});
+
+test('web activity and sources reach the UI before answer text',async(t)=>{
+ const events=[['tool_call',{id:'s1',server:'Web',tool:'google_search',title:'Searching the web',status:'running'}],['sources',{sources:[{title:'Official pricing',url:'https://ai.google.dev/pricing'}]}],['tool_call',{id:'s1',server:'Web',tool:'google_search',title:'Searched the web',status:'done'}],['delta',{text:'Answer'}],['done',{}]];
+ t.mock.method(globalThis,'fetch',async()=>new Response(events.map(([name,data])=>`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`).join(''),{headers:{'Content-Type':'text/event-stream'}}));
+ const received=[];
+ await client().streamMessage('pricing',[],{onToolCall:c=>received.push(c.status),onSources:s=>received.push(s[0].url),onDelta:()=>received.push('answer')});
+ assert.deepEqual(received,['running','https://ai.google.dev/pricing','done','answer']);
+});

@@ -3594,3 +3594,24 @@ pre.tool-chip-detail { font-family: var(--font-geist-mono), monospace; }
 .web-source-host { flex: none; font-size: 11px; color: #8a7e6c; }
 @media (max-width: 760px) { .web-sources { margin-left: 0; } }
 
+
+.edit-prompt-button { display:inline-flex; align-items:center; justify-content:center; width:27px; height:27px; margin-left:10px; border-radius:5px; color:#888; cursor:pointer; background:transparent; }
+.edit-prompt-button:hover:not(:disabled) { color:#333; background:#00000006; }
+.edit-prompt-button:disabled { opacity:.35; cursor:default; }
+.prompt-edit-form { background:#fff; border:1px solid #d6d6d0; border-radius:12px; padding:15px; }
+.prompt-edit-form textarea { width:100%; resize:vertical; min-height:80px; outline:none; background:transparent; font-family:inherit; font-size:14px; line-height:1.7; color:#333; }
+.prompt-edit-form > p { color:#999; font-size:11px; margin-top:8px; }
+.prompt-edit-form > div { display:flex; gap:8px; justify-content:flex-end; margin-top:12px; }
+.prompt-edit-form button { padding:8px 13px; border-radius:6px; font-size:11px; cursor:pointer; color:#666; }
+.prompt-edit-form button[type="submit"] { background:#d94035; color:#fff; }
+.prompt-edit-form button:disabled { opacity:.4; cursor:default; }
+
+.tool-chip.is-web { border-color:#dededb; background:#f5f5f2; }
+.tool-chip.is-web summary { padding:10px 12px; color:#555; }
+.tool-chip.is-web summary > svg { color:#888; }
+.tool-chip.is-web.is-running { border-color:#df3d3333; }
+.tool-chip.is-web.is-running .tool-chip-name { color:#333; }
+.tool-chip.is-web.is-running .tool-chip-status { color:#bf554d; }
+.tool-chip.is-web .tool-chip-detail { background:#fafaf7; color:#777; border-color:#e5e5df; }
+.web-step-detail > span { display:block; margin-bottom:5px; font-size:10px; color:#999; }
+.web-step-detail > p { margin:4px 0; color:#666; }

@@ -64,17 +64,20 @@ export function ToolCalls({ calls }: { calls?: ToolCall[] }) {
     <div className="tool-calls" aria-label="Tools used for this answer">
       {calls.map((call) =>
         call.status === "awaiting_approval" ? <ApprovalCard key={call.id} call={call} /> : (
-          <details key={call.id} className={`tool-chip is-${call.status}`}>
+          <details key={call.id} className={`tool-chip is-${call.status} ${call.server === "Web" ? "is-web" : ""}`}>
             <summary>
-              <Wrench size={12} aria-hidden />
-              <span className="tool-chip-name">{call.server} › {call.title}</span>
+              {call.server === "Web" ? <Globe size={13} aria-hidden /> : <Wrench size={12} aria-hidden />}
+              <span className="tool-chip-name">{call.server === "Web" ? call.title : `${call.server} › ${call.title}`}</span>
               <span className="tool-chip-status">
                 {(() => { const { Icon, label } = STATUS[call.status]; return <><Icon size={12}
                   className={call.status === "running" ? "animate-spin" : undefined} aria-hidden />{label}</>; })()}
               </span>
             </summary>
             {call.arguments && Object.keys(call.arguments).length > 0 && (
-              <pre className="tool-chip-detail">{JSON.stringify(call.arguments, null, 2)}</pre>
+              call.server === "Web" ? <div className="tool-chip-detail web-step-detail">
+                <span>{call.tool === "url_context" ? "Pages" : "Search queries"}</span>
+                {Object.values(call.arguments).flat().filter((value): value is string => typeof value === "string").map((value, index) => <p key={index}>{value}</p>)}
+              </div> : <pre className="tool-chip-detail">{JSON.stringify(call.arguments, null, 2)}</pre>
             )}
             {call.summary && <p className="tool-chip-detail">{call.summary}</p>}
           </details>

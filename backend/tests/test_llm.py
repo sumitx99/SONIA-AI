@@ -51,7 +51,8 @@ class WebToolTests(unittest.TestCase):
         self.assertEqual([b["tools"] for b in bodies], [[{"google_search": {}}, {"url_context": {}}],
                                                         [{"url_context": {}}]])
         self.assertNotIn("search Google", bodies[1]["system_instruction"]["parts"][0]["text"])
-        self.assertEqual(parts[0], {"text": "Hi"})
+        self.assertEqual(parts[0], {"webStatus": "search_unavailable"})
+        self.assertIn({"text": "Hi"}, parts)
         _, [later] = self.stream(response(200, [CHUNK]))
         self.assertEqual(later["tools"], [{"url_context": {}}])
 

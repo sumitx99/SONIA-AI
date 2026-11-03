@@ -191,10 +191,11 @@ export const uploadPDF = async (file: File, chatId?: string, onStatus?: (status:
 };
 
 // Send chat message to backend
-export const sendMessage = async (query: string, documentIds?: number[]): Promise<ChatResponse> => {
+export const sendMessage = async (query: string, documentIds?: number[], history: { sender: "user" | "bot"; content: string }[] = []): Promise<ChatResponse> => {
   try {
     const formData = new FormData();
     formData.append("query", query);
+    formData.append("history", JSON.stringify(history));
     if (documentIds !== undefined) {
       formData.append("scope_documents", "true");
       documentIds.forEach((id) => formData.append("document_ids", String(id)));
@@ -235,9 +236,11 @@ export interface StreamHandlers {
  */
 export const streamMessage = async (
   query: string, documentIds: number[] | undefined, handlers: StreamHandlers,
+  history: { sender: "user" | "bot"; content: string }[] = [],
 ): Promise<{ cutOff: boolean }> => {
   const formData = new FormData();
   formData.append("query", query);
+  formData.append("history", JSON.stringify(history));
   if (documentIds !== undefined) {
     formData.append("scope_documents", "true");
     documentIds.forEach((id) => formData.append("document_ids", String(id)));
@@ -246,7 +249,7 @@ export const streamMessage = async (
 
   // An API deployed before streaming existed: fall back to the one-shot endpoint.
   if (response.status === 404) {
-    const { answer, ...meta } = await sendMessage(query, documentIds);
+    const { answer, ...meta } = await sendMessage(query, documentIds, history);
     handlers.onMeta?.(meta);
     handlers.onDelta(answer);
     return { cutOff: false };

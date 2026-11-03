@@ -176,7 +176,7 @@ class ImageAPITests(unittest.TestCase):
              patch.object(chat_api, "stream_backup_answer", backup), \
              self.assertLogs("app.api.chat", level="WARNING"):
             _, events, _ = self.stream("Summarize", self.gemini_fails(429))
-        self.assertEqual([name for name, _ in events], ["meta", "delta", "delta", "done"])
+        self.assertEqual([name for name, _ in events], ["meta", "tool_call", "delta", "delta", "done"])
         self.assertEqual("".join(data["text"] for name, data in events if name == "delta"), "Backup answer.")
         self.assertEqual(backup.call_args.args, ("Summarize", "Document text"))
 

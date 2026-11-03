@@ -13,8 +13,9 @@ from requests.exceptions import HTTPError
 from app.core.auth import current_user
 from app.mcp_client.agent import answer_with_tools, available_tools, resolve_approval
 from app.services.context import answer_context
+from app.services.chat_memory import parse_history
 from app.services.llm import (NO_ANSWER, BackupUnavailable, backup_configured, gemini_unavailable,
-                              get_llm_response, stream_backup_answer)
+                              get_llm_response, stream_backup_answer, WebSearchUnavailable)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -23,11 +24,12 @@ router = APIRouter()
 @router.post("/chat", tags=["Chat"])
 async def chat(query: str = Form(...), document_ids: list[int] | None = Form(None),
                scope_documents: bool = Form(False), include_images: bool = Form(False),
-               user_id: str = Depends(current_user)):
+               user_id: str = Depends(current_user), history: str | None = Form(None)):
+    turns = parse_history(history)
     try:
         logger.info(f"Received query: '{query}'")
         context, meta = await answer_context(query, document_ids, scope_documents, include_images, user_id)
-        answer = await asyncio.to_thread(get_llm_response, query, context)
+        answer = await asyncio.to_thread(get_llm_response, query, context, *([turns] if turns else []))
         logger.info("Generated LLM response.")
         return {"query": query, "answer": answer, **meta}
 
@@ -40,6 +42,8 @@ async def chat(query: str = Form(...), document_ids: list[int] | None = Form(Non
 
 
 def _failure_message(error: Exception) -> str:
+    if isinstance(error, WebSearchUnavailable):
+        return "Live web search is unavailable across the configured providers. Please try again later; current information could not be verified."
     if isinstance(error, BackupUnavailable) or gemini_unavailable(error):
         return "Sonia's AI models are busy or have used up today's free quota. Please try again in a little while."
     return "The answer was interrupted. Please try again."
@@ -52,7 +56,7 @@ def _sse(event: str, data: dict) -> str:
 @router.post("/chat/stream", tags=["Chat"])
 async def chat_stream(query: str = Form(...), document_ids: list[int] | None = Form(None),
                       scope_documents: bool = Form(False), include_images: bool = Form(False),
-                      user_id: str = Depends(current_user)):
+                      user_id: str = Depends(current_user), history: str | None = Form(None)):
     """Like /chat, but streams the answer as server-sent events while Gemini writes it.
 
     Events: `meta` (images and status, once), `delta` ({"text"}, repeatedly), then `done`,
@@ -61,6 +65,7 @@ async def chat_stream(query: str = Form(...), document_ids: list[int] | None = F
     `tool_call` and, for tools that need consent, `approval_required`. If Gemini is out of quota or
     down before anything was shown, a backup model answers instead.
     """
+    turns = parse_history(history)
     try:
         logger.info(f"Received streaming query: '{query}'")
         # Retrieval errors happen before any bytes are sent, so they keep normal status codes.
@@ -84,8 +89,8 @@ async def chat_stream(query: str = Form(...), document_ids: list[int] | None = F
         try:
             wrote_any = shown_any = False
             try:
-                async for name, data in answer_with_tools(user_id, query, context, declarations, registry):
-                    shown_any = True
+                async for name, data in answer_with_tools(user_id, query, context, declarations, registry, **({"history": turns} if turns else {})):
+                    shown_any = shown_any or name == "delta" or (name == "tool_call" and data.get("server") != "Web")
                     wrote_any = wrote_any or name == "delta"
                     yield _sse(name, data)
             except Exception as error:
@@ -93,10 +98,15 @@ async def chat_stream(query: str = Form(...), document_ids: list[int] | None = F
                 # the answer is cut off rather than started again.
                 if shown_any or not gemini_unavailable(error) or not backup_configured():
                     raise
+                yield _sse("tool_call", {"id": "web-backup", "server": "Web", "tool": "google_search",
+                                         "title": "Switching to Groq", "status": "done",
+                                         "summary": "Gemini is unavailable. Trying the configured Groq fallback."})
                 logger.warning("Gemini unavailable (%s); answering with a backup model", error)
-                async for kind, value in iterate_in_threadpool(stream_backup_answer(query, context)):
+                async for kind, value in iterate_in_threadpool(stream_backup_answer(query, context, *([turns] if turns else []))):
                     if kind == "model":
                         logger.info("Backup model %s is answering", value)
+                    elif kind in {"tool_call", "sources"}:
+                        yield _sse(kind, value)
                     else:
                         wrote_any = True
                         yield _sse("delta", {"text": value})

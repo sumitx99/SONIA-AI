@@ -29,6 +29,7 @@ import { MarkdownMessage } from "@/components/chat/markdown-message";
 import { ToolCalls, WebSources } from "@/components/chat/tool-calls";
 import { streamMessage, uploadPDF, deleteConversation, handleApiError, type ImageAttachment,
   type ChatMessage as Message, type ToolCall } from "@/lib/api";
+import { conversationHistory, editConversation } from "@/lib/chat-context";
 import { supabase } from "@/lib/supabase";
 import { useSession } from "@/lib/hooks/use-session";
 import { useConversations } from "@/lib/hooks/use-conversations";
@@ -47,6 +48,9 @@ export default function SoniaChatInterface() {
     setError: setHistoryError, retry: retryHistory } = useConversations(session?.user.id);
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [input, setInput] = useState("");
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editedPrompt, setEditedPrompt] = useState("");
+  const [generatingId, setGeneratingId] = useState<string | null>(null);
   const [pending, setPending] = useState<{
     id: string;
     kind: "answer" | "upload";
@@ -78,6 +82,8 @@ export default function SoniaChatInterface() {
     end.current?.scrollIntoView({ behavior: "instant", block: "end" });
   }, [messages.length, pending]);
 
+  useEffect(() => { setEditingMessageId(null); setEditedPrompt(""); }, [currentId]);
+
   function newChat() {
     const id = crypto.randomUUID();
     setSessions((previous) => [
@@ -102,13 +108,22 @@ export default function SoniaChatInterface() {
     );
   }
 
-  async function ask() {
-    const query = input.trim();
+  async function ask(replacement?: { messageId: string; content: string }) {
+    const query = (replacement?.content ?? input).trim();
     if (!query || busy.current || !historyLoaded) return;
+    if (replacement && !messages.some(m => m.id === replacement.messageId && m.sender === "user")) return;
     busy.current = true;
     const id = currentId ?? newChat();
-    append(id, { id: crypto.randomUUID(), content: query, sender: "user" });
-    if (!messages.length)
+    const branch = replacement ? editConversation(messages, replacement.messageId, query) : null;
+    const before = branch?.before ?? messages;
+    if (branch) {
+      setSessions(previous => previous.map(chat => chat.id === id ? { ...chat, messages: branch.messages } : chat));
+    } else {
+      append(id, { id: crypto.randomUUID(), content: query, sender: "user" });
+    }
+    setGeneratingId(id);
+    setEditingMessageId(null);
+    if (!before.length)
       setSessions((previous) =>
         previous.map((session) =>
           session.id === id
@@ -151,17 +166,19 @@ export default function SoniaChatInterface() {
           const index = toolCalls.findIndex((item) => item.id === call.id);
           toolCalls = index < 0 ? [...toolCalls, call]
             : toolCalls.map((item, i) => (i === index ? { ...item, ...call } : item));
+          toolCalls = toolCalls.slice(-30);
           update({ tool_calls: toolCalls });
         },
-        onSources: (sources) => update({ sources }),
-      });
+        onSources: (sources) => { start(); update({ sources }); },
+      }, conversationHistory(before));
+      toolCalls = toolCalls.map(call => call.status === "running" ? { ...call, status: cutOff ? "error" as const : "done" as const } : call);
       update({
-        streaming: false,
+        streaming: false, tool_calls: toolCalls,
         ...(cutOff && { notice: "The answer was cut off part-way. Ask again to get the rest." }),
       });
     } catch (error) {
       if (started) {
-        update({ streaming: false, notice: "The answer was cut off part-way. Ask again to get the rest." });
+        update({ streaming: false, tool_calls: toolCalls.map(call => call.status === "running" ? { ...call, status: "error" } : call), notice: "The answer was cut off part-way. Ask again to get the rest." });
       } else {
         append(id, {
           id: crypto.randomUUID(),
@@ -174,6 +191,7 @@ export default function SoniaChatInterface() {
       }
     } finally {
       busy.current = false;
+      setGeneratingId(null);
       setPending(null);
     }
   }
@@ -497,12 +515,19 @@ export default function SoniaChatInterface() {
                       <div className="message-label mono">
                         {message.sender === "bot" && <Emblem />}
                         {message.sender === "bot" ? "SONIA" : "YOU"}
+                        {message.sender === "user" && editingMessageId !== message.id && <button type="button" className="edit-prompt-button" aria-label="Edit prompt" title="Edit prompt" disabled={!!generatingId || !!pending} onClick={() => { setEditingMessageId(message.id); setEditedPrompt(message.content); }}><Pencil size={13} /></button>}
                       </div>
                       {message.sender === "bot" && <ToolCalls calls={message.tool_calls} />}
-                      {message.sender === "bot" && !message.error
+                      {message.sender === "bot" && message.streaming && <WebSources sources={message.sources} />}
+                      {editingMessageId === message.id ? <form className="prompt-edit-form" onSubmit={event => { event.preventDefault(); void ask({ messageId: message.id, content: editedPrompt }); }}>
+                        <label className="sr-only" htmlFor={`edit-${message.id}`}>Edit your question</label>
+                        <textarea id={`edit-${message.id}`} autoFocus value={editedPrompt} onChange={event => setEditedPrompt(event.target.value)} onKeyDown={event => { if (event.key === "Escape") setEditingMessageId(null); }} rows={3} />
+                        <p>Saving will replace the answers after this question.</p>
+                        <div><button type="button" onClick={() => setEditingMessageId(null)}>Cancel</button><button type="submit" disabled={!editedPrompt.trim() || !!generatingId || !!pending}>Save &amp; resend</button></div>
+                      </form> : message.sender === "bot" && !message.error
                         ? <MarkdownMessage content={message.content} streaming={message.streaming} />
                         : <p>{message.content}</p>}
-                      {message.sender === "bot" && <WebSources sources={message.sources} />}
+                      {message.sender === "bot" && !message.streaming && <WebSources sources={message.sources} />}
                       {message.notice && <p role="status" style={{ fontSize: 13, color: "var(--muted-foreground)" }}>{message.notice}</p>}
                       {message.images?.length ? <DocumentImageGallery images={message.images} /> : null}
                     </motion.article>
