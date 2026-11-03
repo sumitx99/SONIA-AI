@@ -154,10 +154,6 @@ export default function SoniaChatInterface() {
           update({ tool_calls: toolCalls });
         },
         onSources: (sources) => update({ sources }),
-        onNotice: (text) => {
-          start();
-          update({ notice: [meta.image_notice, text].filter(Boolean).join(" ") });
-        },
       });
       update({
         streaming: false,

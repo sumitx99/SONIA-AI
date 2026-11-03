@@ -176,8 +176,8 @@ class ImageAPITests(unittest.TestCase):
              patch.object(chat_api, "stream_backup_answer", backup), \
              self.assertLogs("app.api.chat", level="WARNING"):
             _, events, _ = self.stream("Summarize", self.gemini_fails(429))
-        self.assertEqual([name for name, _ in events], ["meta", "notice", "delta", "delta", "done"])
-        self.assertIn("gpt-oss-120b", events[1][1]["text"])
+        self.assertEqual([name for name, _ in events], ["meta", "delta", "delta", "done"])
+        self.assertEqual("".join(data["text"] for name, data in events if name == "delta"), "Backup answer.")
         self.assertEqual(backup.call_args.args, ("Summarize", "Document text"))
 
     def test_an_answer_cut_off_part_way_is_not_restarted_by_the_backup(self):

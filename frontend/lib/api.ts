@@ -226,8 +226,6 @@ export interface StreamHandlers {
   onToolCall?: (call: ToolCall) => void;
   /** Web pages the answer used, once at the end. */
   onSources?: (sources: WebSource[]) => void;
-  /** A note about the answer, e.g. that a backup model wrote it. */
-  onNotice?: (text: string) => void;
 }
 
 /**
@@ -280,7 +278,6 @@ export const streamMessage = async (
       if (event === "meta") handlers.onMeta?.(payload);
       else if (event === "tool_call") handlers.onToolCall?.(payload);
       else if (event === "sources") handlers.onSources?.(payload.sources);
-      else if (event === "notice") handlers.onNotice?.(payload.text);
       else if (event === "delta") {
         wroteText = true;
         handlers.onDelta(payload.text);

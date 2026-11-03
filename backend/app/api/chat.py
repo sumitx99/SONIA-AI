@@ -59,7 +59,7 @@ async def chat_stream(query: str = Form(...), document_ids: list[int] | None = F
     or `error` ({"detail"}) if the answer breaks off part-way. The model may read web pages, listed
     in a `sources` event at the end. With MCP connections it may also call tools, reported as
     `tool_call` and, for tools that need consent, `approval_required`. If Gemini is out of quota or
-    down before anything was shown, a backup model answers and a `notice` ({"text"}) says so.
+    down before anything was shown, a backup model answers instead.
     """
     try:
         logger.info(f"Received streaming query: '{query}'")
@@ -96,8 +96,7 @@ async def chat_stream(query: str = Form(...), document_ids: list[int] | None = F
                 logger.warning("Gemini unavailable (%s); answering with a backup model", error)
                 async for kind, value in iterate_in_threadpool(stream_backup_answer(query, context)):
                     if kind == "model":
-                        yield _sse("notice", {"text": f"Answered by a backup model ({value}): web pages, "
-                                                      "web search and connected tools weren't available."})
+                        logger.info("Backup model %s is answering", value)
                     else:
                         wrote_any = True
                         yield _sse("delta", {"text": value})
