@@ -1,10 +1,16 @@
 """Read public source pages for citation verification, with pinned public DNS addresses."""
 import ipaddress
+import os
 import socket
 from html.parser import HTMLParser
 from urllib.parse import urlsplit, urljoin
 
 import urllib3
+
+
+# Sites such as Wikimedia refuse automated requests whose User-Agent gives no way to contact the
+# operator, especially from cloud servers. Name the app and its public address.
+USER_AGENT = f"Sonia/1.0 (+{os.getenv('FRONTEND_PUBLIC_URL', 'https://sonia-ai-murp.vercel.app').strip()})"
 
 
 class PageText(HTMLParser):
@@ -51,7 +57,7 @@ def read_public_resource(url, max_bytes=1_000_000, allowed_types=("text/html", "
         with pool_type(ip, port=parsed.port or (443 if parsed.scheme == "https" else 80),
                        timeout=urllib3.Timeout(connect=3, read=5), retries=False, **options) as pool:
             path = (parsed.path or "/") + ("?" + parsed.query if parsed.query else "")
-            response = pool.urlopen("GET", path, headers={"Host": parsed.hostname, "User-Agent": "Sonia/1.0 (research app; source and image previews)",
+            response = pool.urlopen("GET", path, headers={"Host": parsed.hostname, "User-Agent": USER_AGENT,
                                                         "Accept-Encoding": "identity"},
                                     redirect=False, preload_content=False)
             try:
@@ -59,10 +65,10 @@ def read_public_resource(url, max_bytes=1_000_000, allowed_types=("text/html", "
                     url = urljoin(url, response.headers.get("Location", ""))
                     continue
                 if response.status != 200:
-                    raise ValueError("Source could not be downloaded")
+                    raise ValueError(f"Source could not be downloaded (HTTP {response.status})")
                 content_type = response.headers.get("Content-Type", "").lower()
                 if not any(kind in content_type for kind in allowed_types):
-                    raise ValueError("Unsupported source content type")
+                    raise ValueError(f"Unsupported source content type ({content_type or 'none'})")
                 data = response.read(max_bytes + 1, decode_content=False)
                 if len(data) > max_bytes:
                     raise ValueError("Source exceeds download limit")

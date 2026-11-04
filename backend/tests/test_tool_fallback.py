@@ -134,3 +134,29 @@ class ToolFallbackTests(unittest.TestCase):
         messages = post.call_args.kwargs["json"]["messages"]
         self.assertEqual(messages[-2]["tool_calls"][0]["id"], messages[-1]["tool_call_id"])
         self.assertEqual(json.loads(messages[-1]["content"]), {"result": "Tuesday"})
+
+
+class BackupRequestSizeTests(unittest.TestCase):
+    def test_oversized_requests_drop_connected_tools_then_shorten_the_context(self):
+        messages = [{"role": "system", "content": "S" * 8000}, {"role": "user", "content": "C" * 40000}]
+        tools = [{"type": "function", "function": {"name": name, "description": "d" * 3000, "parameters": {}}}
+                 for name in ("c0__zapier", "web_search")]
+        fitted, kept = llm._fit_groq_request(messages, tools)
+        self.assertEqual([tool["function"]["name"] for tool in kept], ["web_search"])
+        self.assertEqual(fitted[0]["content"], "S" * 8000)
+        self.assertLessEqual(llm._estimated_tokens([fitted, kept]), llm.GROQ_REQUEST_TOKENS)
+        self.assertTrue(fitted[1]["content"].endswith("[shortened to fit the backup model]"))
+
+    def test_small_requests_are_sent_unchanged(self):
+        messages = [{"role": "system", "content": "rules"}, {"role": "user", "content": "question"}]
+        tools = [{"type": "function", "function": {"name": "c0__notes", "description": "", "parameters": {}}}]
+        self.assertEqual(llm._fit_groq_request(list(messages), list(tools)), (messages, tools))
+
+    def test_a_request_too_large_for_one_model_tries_the_next(self):
+        too_large, ok = response(413), response(200, [])
+        ok.iter_lines.return_value = ['data: {"choices": [{"delta": {"content": "Answer"}}]}', "data: [DONE]"]
+        with patch.object(llm, "GROQ_API_KEY", "k"), patch.object(llm, "GROQ_MODELS", ["big", "small"]), \
+             patch.object(llm.requests, "post", side_effect=[too_large, ok]) as post:
+            parts = list(llm.stream_tool_backup([{"role": "user", "parts": [{"text": "hi"}]}], [], allow_web=False))
+        self.assertEqual(parts, [{"text": "Answer"}])
+        self.assertEqual([call.kwargs["json"]["model"] for call in post.call_args_list], ["big", "small"])

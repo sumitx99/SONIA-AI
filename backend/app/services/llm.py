@@ -323,6 +323,33 @@ def backup_configured() -> bool:
     return bool(GROQ_API_KEY and GROQ_MODELS)
 
 
+# Groq's free plan allows ~8,000 tokens a minute per model and refuses (413) any single request
+# larger than that, so backup requests are kept under this estimate.
+GROQ_REQUEST_TOKENS = int(os.getenv("GROQ_REQUEST_TOKENS", "7000"))
+
+
+def _groq_refused(status: int) -> bool:
+    """Too large for the model's limit (413), out of quota (429) or down: try the next model."""
+    return status in (413, 429) or status >= 500
+
+
+def _estimated_tokens(value) -> int:
+    return len(json.dumps(value, ensure_ascii=False)) // 4
+
+
+def _fit_groq_request(messages: list, tools: list) -> tuple[list, list]:
+    """Shrinks a backup request to Groq's per-request limit: the user's connected tools go
+    first (web_search stays), then the longest non-system message is shortened."""
+    if _estimated_tokens([messages, tools]) > GROQ_REQUEST_TOKENS:
+        tools = [tool for tool in tools if tool["function"]["name"] == WEB_SEARCH_TOOL["name"]]
+    excess = _estimated_tokens([messages, tools]) - GROQ_REQUEST_TOKENS
+    if excess > 0 and len(messages) > 1:
+        longest = max(messages[1:], key=lambda message: len(message.get("content") or ""))
+        text = longest.get("content") or ""
+        longest["content"] = text[:max(0, len(text) - excess * 4 - 200)] + "\n…[shortened to fit the backup model]"
+    return messages, tools
+
+
 def stream_tool_backup(contents: list, declarations: list, allow_web: bool = True):
     """Use the same client-executed tools on fallback; keep their approval policy in the agent.
 
@@ -353,6 +380,7 @@ def stream_tool_backup(contents: list, declarations: list, allow_web: bool = Tru
             messages.append({"role": "user", "content": text})
     tools = [{"type": "function", "function": {"name": item["name"],
               "description": item.get("description", ""), "parameters": item.get("parametersJsonSchema", {})}} for item in offered]
+    messages, tools = _fit_groq_request(messages, tools)
     for model in dict.fromkeys(GROQ_MODELS):
         try:
             response = requests.post(GROQ_API, headers={"Authorization": f"Bearer {GROQ_API_KEY}"}, json={
@@ -361,7 +389,7 @@ def stream_tool_backup(contents: list, declarations: list, allow_web: bool = Tru
             }, stream=True, timeout=(10, 120))
         except (requests.ConnectionError, requests.Timeout):
             continue
-        if response.status_code == 429 or response.status_code >= 500:
+        if _groq_refused(response.status_code):
             response.close()
             continue
         with response:
@@ -412,7 +440,7 @@ def stream_backup_answer(query: str, context: str, history=None):
         except (requests.ConnectionError, requests.Timeout):
             logger.warning("Backup model %s unreachable", model)
             continue
-        if response.status_code == 429 or response.status_code >= 500:
+        if _groq_refused(response.status_code):
             logger.warning("Backup model %s unavailable (HTTP %s)", model, response.status_code)
             response.close()
             continue
@@ -540,7 +568,7 @@ def search_web(query: str) -> tuple[str, list[dict], list[dict]]:
         except (requests.ConnectionError, requests.Timeout):
             logger.warning("Web search with %s unreachable", model)
             continue
-        if response.status_code == 429 or response.status_code >= 500:
+        if _groq_refused(response.status_code):
             logger.warning("Web search with %s unavailable (HTTP %s)", model, response.status_code)
             response.close()
             continue

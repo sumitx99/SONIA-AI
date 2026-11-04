@@ -71,6 +71,10 @@ class CitationTests(unittest.TestCase):
         self.assertIn("[1] attention.pdf", text)
         self.assertIn("not verified", text)
 
+    def test_wide_bracket_markers_become_chat_markers(self):
+        body, _ = checker.check_citations(answer([], body="Scored 28.4 BLEU【1】 and more【12】."), CONTEXT)
+        self.assertEqual(body, "Scored 28.4 BLEU[1] and more[12].")
+
     def test_an_unfinished_block_while_streaming_is_split_off(self):
         body, entries = checker.split_citations('Answer [1].\n\n```citations\n[{"n": 1, "sou')
         self.assertEqual((body, entries), ("Answer [1].", []))

@@ -157,3 +157,9 @@ class WebImagesTests(unittest.TestCase):
         self.assertIn("user_id=$1", query)
         self.assertEqual(user, "user-1")
         self.assertEqual(ids, [IMAGE_ID])
+
+
+class SourceReaderIdentityTests(unittest.TestCase):
+    def test_requests_name_the_app_and_a_contact_address(self):
+        from app.services import source_reader
+        self.assertRegex(source_reader.USER_AGENT, r"^Sonia/\d+\.\d+ \(\+https://")

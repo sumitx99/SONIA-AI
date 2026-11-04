@@ -19,6 +19,7 @@ MARKER = "SONIA_DOCUMENT_EVIDENCE\n"
 MAX_CITATIONS = 40
 MAX_QUOTE_WORDS = 25
 MAX_FETCHES = 6
+_WIDE_MARKER = re.compile(r"【(\d{1,2})】")
 _BLOCK = re.compile(r"\n*```citations[^\n]*\n(.*?)(?:\n```[^\n]*|\Z)", re.S)
 
 
@@ -69,6 +70,8 @@ def check_citations(answer: str, context: str, web_sources=(), evidence=()) -> t
     ({"url", "kind": "web"}). Returns the answer body and one citation per number.
     """
     body, entries = split_citations(answer)
+    # gpt-oss models sometimes write markers as 【1】; the chat renders [1].
+    body = _WIDE_MARKER.sub(r"[\1]", body)
     documents = {item["id"]: item for item in document_evidence(context)}
     tools = {item["id"]: item for item in evidence if item.get("kind") == "tool" and item.get("id")}
     pages = {item["url"]: item for item in evidence if item.get("kind") == "web" and safe_url(item.get("url"))}
