@@ -18,7 +18,8 @@ import requests
 from fastapi.concurrency import iterate_in_threadpool
 
 from app.services.llm import (WEB_SEARCH_TOOL, conversation_turns, google_search_ready, search_web,
-                              stream_gemini_parts, web_search_available)
+                              stream_gemini_parts, web_search_available, stream_tool_backup,
+                              backup_configured, gemini_unavailable)
 from app.services.web_activity import WebActivity, safe_url
 from app.mcp_client import store
 from app.mcp_client.oauth import provider_for
@@ -96,6 +97,8 @@ async def available_tools(user_id: str) -> tuple[list[dict], dict]:
 
 
 async def _run_tool(user_id: str, connection: dict, tool: dict, arguments: dict) -> tuple[str, bool]:
+    if connection.get("unavailable_reason"):
+        return connection["unavailable_reason"], True
     try:
         auth = provider_for(user_id, connection) if connection["auth_type"] == "oauth" else None
         async with open_session(connection, auth) as session:
@@ -118,6 +121,23 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
     contents = conversation_turns(query, context, history)
     sources: dict[str, dict] = {}
     web = WebActivity()
+    backend = {"backup": False}
+
+    def iterate_model_parts(offered):
+        if backend["backup"]:
+            yield from stream_tool_backup(contents, offered, allow_web=round_number < MAX_ROUNDS)
+            return
+        generated = False
+        try:
+            for part in stream_gemini_parts(contents, offered):
+                generated = True
+                yield part
+        except Exception as error:
+            if generated or not gemini_unavailable(error) or not backup_configured():
+                raise
+            backend["backup"] = True
+            # Keep the connected tools; their execution and approvals remain in this loop.
+            yield from stream_tool_backup(contents, offered, allow_web=round_number < MAX_ROUNDS)
     for round_number in range(MAX_ROUNDS + 1):
         # The last round offers no tools, so the model has to answer with what it has. While
         # Google Search is paused, web search runs through the web_search tool instead.
@@ -126,7 +146,7 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
             offered = declarations + ([WEB_SEARCH_TOOL] if not google_search_ready() and web_search_available() else [])
         model_parts, calls, search_refused = [], [], False
         try:
-            async for part in iterate_in_threadpool(stream_gemini_parts(contents, offered)):
+            async for part in iterate_in_threadpool(iterate_model_parts(offered)):
                 if "searchUnavailable" in part:
                     search_refused = True
                     continue
@@ -162,6 +182,7 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
                         if event:
                             yield "tool_call", event
                 if "functionCall" in part:
+                    part["functionCall"].setdefault("id", uuid.uuid4().hex)
                     calls.append(part["functionCall"])
                 elif part.get("text") and not part.get("thought"):
                     yield "delta", {"text": part["text"]}
@@ -172,6 +193,10 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
                 logger.warning("Gemini rejected the connected tools; answering without them: %s",
                                error.response.text[:300])
                 declarations = []
+                for connection in {item[0]["id"]: item[0] for item in registry.values()}.values():
+                    yield "tool_call", {"id": f"connection-{connection['id']}", "server": connection["name"],
+                        "tool": "connection_status", "title": "Tools unavailable", "status": "error",
+                        "summary": "The connected tools could not be loaded for this answer. No action was executed."}
                 continue
             for event in web.finish(failed=True):
                 yield "tool_call", event

@@ -16,9 +16,10 @@ class MemoryTests(unittest.TestCase):
         app.dependency_overrides[current_user] = lambda: 'user-1'
         self.client = TestClient(app)
 
-    def test_history_becomes_conversation_turns_and_the_model_picks_the_language(self):
+    def test_history_is_context_data_and_the_current_question_controls_language(self):
         body = _request_body('assume any no','ctx',HISTORY)
-        self.assertEqual([m['role'] for m in body['contents']],['user','model','user'])
+        self.assertEqual([m['role'] for m in body['contents']],['user'])
+        self.assertIn('Past conversation data',body['contents'][0]['parts'][0]['text'])
         self.assertIn('CNN and RNN',body['contents'][0]['parts'][0]['text'])
         self.assertIn('language and script of the CURRENT user question',body['system_instruction']['parts'][0]['text'])
 

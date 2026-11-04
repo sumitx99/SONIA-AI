@@ -210,7 +210,10 @@ class ToolSchemaTests(unittest.TestCase):
              self.assertLogs("app.mcp_client.agent", level="WARNING"):
             events = asyncio.run(main())
         self.assertEqual(seen, [["c0__create_note"], []])
-        self.assertEqual(events, [("delta", {"text": "Done."})])
+        self.assertEqual(events[-1], ("delta", {"text": "Done."}))
+        self.assertEqual(events[0][1]["status"], "error")
+        self.assertEqual(events[0][1]["server"], "Notes")
+        self.assertIn("No action was executed", events[0][1]["summary"])
 
 
 class ConnectionsAPITests(unittest.TestCase):

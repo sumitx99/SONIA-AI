@@ -118,6 +118,7 @@ class ImageAPITests(unittest.TestCase):
     def stream(self, query, parts, data=None):
         with patch.object(context, "get_embedding", return_value=[0.1]), \
              patch.object(context, "get_reranked_context", return_value="Document text"), \
+             patch.object(agent, "backup_configured", return_value=False), \
              patch.object(agent, "stream_gemini_parts", return_value=iter(parts)) as llm:
             response = self.client.post("/chat/stream", data={"query": query, **(data or {})})
         events = []

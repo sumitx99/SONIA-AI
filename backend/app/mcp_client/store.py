@@ -77,7 +77,12 @@ def _row(row, with_secret=False) -> dict:
         "tools": [{**tool, "policy": policies.get(tool["name"], default_policy(tool))} for tool in tools],
     }
     if with_secret:
-        connection["secret"] = decrypt_secret(row["secret"])
+        connection["secret"] = None
+        if connection["auth_type"] != "none":
+            try:
+                connection["secret"] = decrypt_secret(row["secret"])
+            except (SecretKeyMissing, ValueError):
+                connection["unavailable_reason"] = "Stored credentials could not be read. Reconnect this service in Settings → Connections."
     return connection
 
 

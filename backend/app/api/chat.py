@@ -126,7 +126,9 @@ async def _answer_events(user_id, query, context, declarations, registry, turns)
             yield name, data
     except Exception as error:
         # A backup may answer only if nothing was shown and no external action ran.
-        if shown or not gemini_unavailable(error) or not backup_configured():
+        # Connected-tool fallbacks belong to the agent, which preserves the registry.
+        # Never replace them with a plain answer path that has no connected tools.
+        if declarations or shown or not gemini_unavailable(error) or not backup_configured():
             raise
         logger.warning("Gemini unavailable (%s); answering with a backup model", error)
         async for kind, value in iterate_in_threadpool(stream_backup_answer(query, context, *([turns] if turns else []))):

@@ -63,13 +63,13 @@ export function ToolCalls({ calls: rawCalls }: { calls?: ToolCall[] }) {
   const calls = publicToolCalls(rawCalls);
   if (!calls.length) return null;
   return (
-    <div className="tool-calls" aria-label="Tools used for this answer">
+    <div className="tool-calls" aria-label="Tools used for this answer" aria-live="polite" aria-relevant="additions text">
       {calls.map((call) =>
         call.status === "awaiting_approval" ? <ApprovalCard key={call.id} call={call} /> : (
           <details key={call.id} className={`tool-chip is-${call.status} ${call.server === "Web" ? "is-web" : ""}`}>
             <summary>
               {call.server === "Web" ? <Globe size={13} aria-hidden /> : <Wrench size={12} aria-hidden />}
-              <span className="tool-chip-name">{call.server === "Web" ? call.title : `${call.server} › ${call.title}`}</span>
+              <span className="tool-chip-name">{call.server === "Web" ? call.title : `MCP · ${call.server} › ${call.title}`}</span>
               <span className="tool-chip-status">
                 {(() => { const { Icon, label } = STATUS[call.status]; return <><Icon size={12}
                   className={call.status === "running" ? "animate-spin" : undefined} aria-hidden />{label}</>; })()}

@@ -71,6 +71,7 @@ export default function SoniaChatInterface() {
   const busy = useRef(false);
   const current = sessions.find((session) => session.id === currentId);
   const messages = current?.messages ?? [];
+  const toolStepCount = messages[messages.length - 1]?.tool_calls?.length ?? 0;
 
   useEffect(() => { setCurrentId(null); setDeleteTarget(null); }, [session?.user.id]);
 
@@ -85,7 +86,7 @@ export default function SoniaChatInterface() {
 
   useEffect(() => {
     end.current?.scrollIntoView({ behavior: "instant", block: "end" });
-  }, [messages.length, pending]);
+  }, [messages.length, pending, toolStepCount]);
 
   useEffect(() => { setEditingMessageId(null); setEditedPrompt(""); }, [currentId]);
 
