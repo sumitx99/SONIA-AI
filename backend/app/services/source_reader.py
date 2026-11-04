@@ -33,7 +33,7 @@ def public_addresses(host):
     return addresses
 
 
-def read_source(url):
+def read_public_resource(url, max_bytes=1_000_000, allowed_types=("text/html", "text/plain", "application/json")):
     """No cookies/auth, no private addresses/ports, bounded bytes and redirects.
 
     Connect directly to the validated IP with the original TLS hostname, avoiding
@@ -51,7 +51,7 @@ def read_source(url):
         with pool_type(ip, port=parsed.port or (443 if parsed.scheme == "https" else 80),
                        timeout=urllib3.Timeout(connect=3, read=5), retries=False, **options) as pool:
             path = (parsed.path or "/") + ("?" + parsed.query if parsed.query else "")
-            response = pool.urlopen("GET", path, headers={"Host": parsed.hostname, "User-Agent": "Sonia-SourceVerifier/1.0",
+            response = pool.urlopen("GET", path, headers={"Host": parsed.hostname, "User-Agent": "Sonia/1.0 (research app; source and image previews)",
                                                         "Accept-Encoding": "identity"},
                                     redirect=False, preload_content=False)
             try:
@@ -59,19 +59,24 @@ def read_source(url):
                     url = urljoin(url, response.headers.get("Location", ""))
                     continue
                 if response.status != 200:
-                    return ""
+                    raise ValueError("Source could not be downloaded")
                 content_type = response.headers.get("Content-Type", "").lower()
-                if not any(kind in content_type for kind in ("text/html", "text/plain", "application/json")):
-                    return ""
-                data = response.read(1_000_001, decode_content=False)
-                if len(data) > 1_000_000:
-                    return ""
-                text = data.decode("utf-8", errors="replace")
-                if "text/html" in content_type:
-                    parser = PageText()
-                    parser.feed(text)
-                    text = " ".join(parser.parts)
-                return " ".join(text.split())[:30_000]
+                if not any(kind in content_type for kind in allowed_types):
+                    raise ValueError("Unsupported source content type")
+                data = response.read(max_bytes + 1, decode_content=False)
+                if len(data) > max_bytes:
+                    raise ValueError("Source exceeds download limit")
+                return data, content_type
             finally:
                 response.close()
-    return ""
+    raise ValueError("Too many source redirects")
+
+
+def read_source(url):
+    data, content_type = read_public_resource(url)
+    text = data.decode("utf-8", errors="replace")
+    if "text/html" in content_type:
+        parser = PageText()
+        parser.feed(text)
+        text = " ".join(parser.parts)
+    return " ".join(text.split())[:30_000]

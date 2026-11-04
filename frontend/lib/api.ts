@@ -79,6 +79,7 @@ export interface ChatMessage {
   sender: "user" | "bot";
   error?: boolean;
   images?: ImageAttachment[];
+  web_images?: WebImage[];
   notice?: string | null;
   streaming?: boolean;
   tool_calls?: ToolCall[];
@@ -140,6 +141,28 @@ export interface ImageAttachment {
   url_expires_in: number;
 }
 
+export interface WebImage {
+  image_id: string;
+  title: string;
+  description: string;
+  author: string;
+  license: string;
+  license_url: string;
+  source_url: string;
+  provider: string;
+  preview_note: string;
+  width: number;
+  height: number;
+  url: string;
+  url_expires_in: number;
+}
+
+export async function refreshWebImage(imageId: string): Promise<WebImage> {
+  const response = await apiFetch(`/web-images/${encodeURIComponent(imageId)}`);
+  if (!response.ok) throw await responseError(response);
+  return response.json();
+}
+
 // Types for API responses
 export interface UploadResponse {
   success?: boolean;
@@ -157,6 +180,7 @@ export interface ChatResponse {
   answer: string;
   citations?: Citation[];
   images?: ImageAttachment[];
+  web_images?: WebImage[];
   image_notice?: string | null;
   image_status?: string;
 }
@@ -248,6 +272,7 @@ export interface StreamHandlers {
   onToolCall?: (call: ToolCall) => void;
   /** Web pages the answer used, once at the end. */
   onSources?: (sources: WebSource[]) => void;
+  onWebImages?: (images: WebImage[]) => void;
   /** The final answer text (without its citations block) and its checked citations, at the end. */
   onCitations?: (answer: string, citations: Citation[]) => void;
 }
@@ -272,9 +297,10 @@ export const streamMessage = async (
 
   // An API deployed before streaming existed: fall back to the one-shot endpoint.
   if (response.status === 404) {
-    const { answer, citations, ...meta } = await sendMessage(query, documentIds, history);
+    const { answer, citations, web_images, ...meta } = await sendMessage(query, documentIds, history);
     handlers.onMeta?.(meta);
     handlers.onDelta(answer);
+    if (web_images?.length) handlers.onWebImages?.(web_images);
     if (citations) handlers.onCitations?.(answer, citations);
     return { cutOff: false };
   }
@@ -305,6 +331,7 @@ export const streamMessage = async (
       if (event === "meta") handlers.onMeta?.(payload);
       else if (event === "tool_call") handlers.onToolCall?.(payload);
       else if (event === "sources") handlers.onSources?.(payload.sources);
+      else if (event === "web_images") handlers.onWebImages?.(payload.images);
       else if (event === "citations") handlers.onCitations?.(payload.answer, payload.citations);
       else if (event === "delta") {
         wroteText = true;

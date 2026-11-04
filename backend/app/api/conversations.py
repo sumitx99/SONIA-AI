@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field
 from app.core.auth import current_user
 from app.core.db import ensure_document_schema, get_pool, owned_document_ids
 from app.services.images.image_storage import valid_chat_id
+from app.services.images.web_images import owned_images, attachment as web_attachment
+from app.services.images.image_storage import R2ImageStorage
 
 router = APIRouter(prefix="/conversations", tags=["Conversations"])
 _schema_ready = False
@@ -64,6 +66,11 @@ class SavedSource(BaseModel):
     url: str = Field(max_length=2048, pattern=r"^https?://")
 
 
+class SavedWebImage(BaseModel):
+    # Canonical source/license metadata stays server-owned. Never persist signed URLs.
+    image_id: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
 class SavedCitation(BaseModel):
     """One numbered citation in an answer, as checked against its source."""
     n: int = Field(ge=1, le=99)
@@ -83,6 +90,7 @@ class SavedMessage(BaseModel):
     error: bool = False
     notice: str | None = Field(None, max_length=2000)
     images: list[SavedImage] = Field(default_factory=list, max_length=25)
+    web_images: list[SavedWebImage] = Field(default_factory=list, max_length=6)
     tool_calls: list[SavedToolCall] = Field(default_factory=list, max_length=30)
     sources: list[SavedSource] = Field(default_factory=list, max_length=10)
     citations: list[SavedCitation] = Field(default_factory=list, max_length=40)
@@ -131,6 +139,17 @@ async def list_conversations(user_id: str = Depends(current_user)):
                                 "updatedAt": document["uploaded_at"].isoformat()}
         history[chat_id]["documents"].append(document["filename"])
         history[chat_id]["documentIds"].append(document["id"])
+    refs = [image["image_id"] for chat in history.values() for message in chat["messages"] for image in message.get("web_images", [])]
+    if refs:
+        rows = await owned_images(user_id, refs)
+        try:
+            storage = R2ImageStorage.from_env()
+        except ValueError:
+            storage = None  # Preserve saved references even while storage configuration is unavailable.
+        for chat in history.values():
+            for message in chat["messages"]:
+                message["web_images"] = [web_attachment(rows[image["image_id"]], storage)
+                    for image in message.get("web_images", []) if image["image_id"] in rows]
     return {"conversations": sorted(history.values(), key=lambda item: item["updatedAt"], reverse=True)}
 
 
@@ -141,6 +160,9 @@ async def save_conversation(chat_id: str, payload: ConversationInput, user_id: s
     image_documents = {image.document_id for message in payload.messages for image in message.images}
     if image_documents and set(await owned_document_ids(user_id, list(image_documents))) != image_documents:
         raise HTTPException(403, "An image belongs to a document outside your account")
+    web_refs = {image.image_id for message in payload.messages for image in message.web_images}
+    if web_refs and set(await owned_images(user_id, web_refs)) != web_refs:
+        raise HTTPException(403, "A web image does not belong to your account")
     messages = json.dumps([message.model_dump(exclude_none=True) for message in payload.messages])
     if len(messages.encode()) > 2_000_000:
         raise HTTPException(413, "This conversation is too large. Start a new conversation.")

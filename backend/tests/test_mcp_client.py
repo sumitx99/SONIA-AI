@@ -206,6 +206,7 @@ class ToolSchemaTests(unittest.TestCase):
         async def main():
             return [event async for event in agent.answer_with_tools("user-1", "q", "c", declarations, tools)]
         with patch.object(agent, "stream_gemini_parts", gemini), \
+             patch.object(agent, "image_search_configured", return_value=False), \
              patch.object(agent, "web_search_available", return_value=False), \
              self.assertLogs("app.mcp_client.agent", level="WARNING"):
             events = asyncio.run(main())

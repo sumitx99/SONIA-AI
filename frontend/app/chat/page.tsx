@@ -27,6 +27,7 @@ import {
 import { Brand, Emblem } from "@/components/brand";
 import { AccountMenu } from "@/components/account/account-menu";
 import { DocumentImageGallery } from "@/components/chat/document-image";
+import { WebImageGallery } from "@/components/chat/web-images";
 import { MarkdownMessage } from "@/components/chat/markdown-message";
 import { ToolCalls, WebSources } from "@/components/chat/tool-calls";
 import { streamMessage, uploadPDF, deleteConversation, handleApiError, type ImageAttachment,
@@ -176,6 +177,11 @@ export default function SoniaChatInterface() {
           update({ tool_calls: toolCalls });
         },
         onSources: (sources) => { start(); update({ sources }); },
+        onWebImages: (images) => {
+          start();
+          setSessions(previous => previous.map(chat => chat.id === id ? { ...chat, messages: chat.messages.map(message =>
+            message.id === answerId ? { ...message, notice: images.length ? null : message.notice, web_images: [...new Map([...(message.web_images ?? []), ...images].map(image => [image.image_id, image])).values()] } : message) } : chat));
+        },
         onCitations: (answer, citations) => {
           text = answer;
           update({ content: answer, citations });
@@ -548,6 +554,7 @@ export default function SoniaChatInterface() {
                       {message.sender === "bot" && !message.streaming && <WebSources sources={message.sources} />}
                       {message.notice && <p role="status" style={{ fontSize: 13, color: "var(--muted-foreground)" }}>{message.notice}</p>}
                       {message.images?.length ? <DocumentImageGallery images={message.images} /> : null}
+                      {message.web_images?.length ? <WebImageGallery images={message.web_images} /> : null}
                     </motion.article>
                   ))}
                 </AnimatePresence>

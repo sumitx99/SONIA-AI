@@ -9,6 +9,7 @@ function durable(chats: ChatSession[]): ChatSession[] {
   return chats.map((chat) => ({ ...chat, messages: chat.messages.map((message) => ({
     ...message, streaming: false,
     images: message.images?.map((image) => ({ ...image, url: "", source_url: null })),
+    web_images: message.web_images?.map((image) => ({ ...image, url: "" })),
   })) }));
 }
 

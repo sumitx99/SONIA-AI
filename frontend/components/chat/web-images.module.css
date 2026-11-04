@@ -1,0 +1,15 @@
+.gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 16px; margin: 24px 0; }
+.card { min-width: 0; margin: 0; overflow: hidden; border: 1px solid #dedbd6; border-radius: 14px; background: #fff; }
+.preview { display: grid; place-items: center; height: 230px; padding: 14px; background: #f0efec; }
+.preview a { display: contents; }
+.preview img { max-width: 100%; max-height: 202px; width: auto; height: auto; object-fit: contain; border-radius: 4px; }
+.caption { display: grid; gap: 8px; padding: 16px; font-size: 14px; overflow-wrap: anywhere; }
+.caption strong { font-size: 14px; line-height: 1.5; font-weight: 600; }
+.eyebrow { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #777; }
+.author, .caption small { font-size: 12px; line-height: 1.5; color: #777; }
+.links { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; }
+.links a { display: inline-flex; align-items: center; gap: 5px; color: #a83229; font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
+.error { display: grid; justify-items: center; text-align: center; gap: 10px; font-size: 12px; }
+.error p { margin: 0; }
+.error button { display: flex; align-items: center; gap: 5px; padding: 7px 10px; border: 1px solid #ccc; border-radius: 8px; }
+.loading { display: flex; align-items: center; gap: 8px; color: #777; font-size: 12px; }

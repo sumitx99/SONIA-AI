@@ -14,6 +14,7 @@ from app.api.chat import router as chat_router
 from app.api.conversations import router as conversations_router
 from app.api.documents import router as documents_router
 from app.api.profiles import router as profiles_router
+from app.api.web_images import router as web_images_router
 from app.core.db import close_pool
 from app.mcp_client.connections import router as mcp_connections_router
 from app.mcp_server.server import MCPMount, build_mcp_app
@@ -58,7 +59,7 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="Sonia Advanced RAG API", lifespan=lifespan)
-for router in (chat_router, documents_router, conversations_router, profiles_router, mcp_connections_router):
+for router in (chat_router, documents_router, conversations_router, profiles_router, web_images_router, mcp_connections_router):
     app.include_router(router)
 
 # Comma-separated, e.g. "https://sonia.vercel.app,http://localhost:3000".

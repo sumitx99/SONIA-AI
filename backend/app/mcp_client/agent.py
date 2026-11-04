@@ -10,6 +10,7 @@ Progress is reported as stream events for the chat UI:
 """
 
 import asyncio
+import json
 import logging
 import re
 import uuid
@@ -21,6 +22,7 @@ from app.services.llm import (WEB_SEARCH_TOOL, conversation_turns, google_search
                               stream_gemini_parts, web_search_available, stream_tool_backup,
                               backup_configured, gemini_unavailable)
 from app.services.web_activity import WebActivity, safe_url
+from app.services.images.web_images import IMAGE_SEARCH_TOOL, configured as image_search_configured, search_and_store
 from app.mcp_client import store
 from app.mcp_client.oauth import provider_for
 from app.mcp_client.session import call_tool, open_session
@@ -121,6 +123,7 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
     contents = conversation_turns(query, context, history)
     sources: dict[str, dict] = {}
     web = WebActivity()
+    image_searches, image_count = 0, 0
     backend = {"backup": False}
 
     def iterate_model_parts(offered):
@@ -144,6 +147,8 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
         offered = []
         if round_number < MAX_ROUNDS:
             offered = declarations + ([WEB_SEARCH_TOOL] if not google_search_ready() and web_search_available() else [])
+            if image_search_configured() and image_searches < 2 and image_count < 3:
+                offered = offered + [IMAGE_SEARCH_TOOL]
         model_parts, calls, search_refused = [], [], False
         try:
             async for part in iterate_in_threadpool(iterate_model_parts(offered)):
@@ -217,7 +222,38 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
             name, arguments = call.get("name", ""), call.get("args") or {}
             entry = registry.get(name)
             source_id = None
-            if entry is None and name == WEB_SEARCH_TOOL["name"]:
+            if entry is None and name == IMAGE_SEARCH_TOOL["name"]:
+                event = {"id": f"web-images-{uuid.uuid4().hex[:8]}", "server": "Web", "tool": "image_search",
+                         "title": "Searching web images", "arguments": {"query": str(arguments.get("query", ""))[:250]}}
+                yield "tool_call", {**event, "status": "running"}
+                try:
+                    if not any(tool["name"] == IMAGE_SEARCH_TOOL["name"] for tool in offered):
+                        raise ValueError("Image search is unavailable for this turn")
+                    image_searches += 1
+                    requested = arguments.get("limit", 2)
+                    if isinstance(requested, bool) or not isinstance(requested, int) or requested < 1:
+                        raise ValueError("Choose a valid image count")
+                    images = await search_and_store(user_id, arguments.get("query"), min(requested, 3 - image_count))
+                    image_count += len(images)
+                    text, is_error = "No suitable reusable images were found.", False
+                    if images:
+                        yield "web_images", {"images": images}
+                        source_id = f"I{event['id']}"
+                        # Signed URLs are only for the UI, never included in model/tool context.
+                        text = json.dumps([{key: image[key] for key in ("image_id", "title", "source_url", "author", "license", "license_url")}
+                                           for image in images], ensure_ascii=False)
+                        yield "evidence", {"sources": [{"id": source_id, "kind": "tool", "title": "Web image search", "text": text}]}
+                        for image in images:
+                            if len(sources) < MAX_SOURCES:
+                                sources.setdefault(image["source_url"], {"title": image["title"], "url": image["source_url"]})
+                        yield "sources", {"sources": list(sources.values())}
+                except Exception:
+                    logger.info("Web image search failed", exc_info=True)
+                    text, is_error = "Web images could not be searched or saved. No image is available; do not invent one.", True
+                yield "tool_call", {**event, "status": "error" if is_error else "done",
+                    "title": "Web images unavailable" if is_error else "Web image search complete",
+                    "summary": "No images were saved." if is_error else f"{len(images)} image previews saved."}
+            elif entry is None and name == WEB_SEARCH_TOOL["name"]:
                 search_query = str(arguments.get("query") or query)[:500]
                 event = {"id": f"web-search-{uuid.uuid4().hex[:8]}", "server": "Web", "tool": "web_search",
                          "title": "Searching the web", "arguments": {"query": search_query}}

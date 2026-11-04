@@ -31,12 +31,14 @@ async def chat(query: str = Form(...), document_ids: list[int] | None = Form(Non
         logger.info(f"Received query: '{query}'")
         context, meta = await answer_context(query, document_ids, scope_documents, include_images, user_id)
         declarations, registry = await _load_tools(user_id)
-        answer, citations = "", []
+        answer, citations, web_images = "", [], []
         async for name, data in _answer_events(user_id, query, context, declarations, registry, turns):
             if name == "citations":
                 answer, citations = data["answer"], data["citations"]
+            elif name == "web_images":
+                web_images.extend(data["images"])
         logger.info("Generated LLM response.")
-        return {"query": query, "answer": answer or NO_ANSWER, "citations": citations, **meta}
+        return {"query": query, "answer": answer or NO_ANSWER, "citations": citations, "web_images": web_images, **meta}
 
     except HTTPError as e:
         logger.error(f"HTTPError during LLM call: {e}")
