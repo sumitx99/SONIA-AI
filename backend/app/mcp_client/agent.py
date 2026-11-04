@@ -16,8 +16,8 @@ import uuid
 
 from fastapi.concurrency import iterate_in_threadpool
 
-from app.services.llm import stream_gemini_parts, conversation_turns, GeminiSearchUnavailable
-from app.services.web_search import needs_web
+from app.services.llm import (WEB_SEARCH_TOOL, conversation_turns, google_search_ready, search_web,
+                              stream_gemini_parts, web_search_available)
 from app.services.web_activity import WebActivity, safe_url
 from app.mcp_client import store
 from app.mcp_client.oauth import provider_for
@@ -95,19 +95,16 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
     sources: dict[str, dict] = {}
     web = WebActivity()
     for round_number in range(MAX_ROUNDS + 1):
-        # The last round offers no tools, so the model has to answer with what it has.
-        offered = declarations if round_number < MAX_ROUNDS else []
-        model_parts, calls = [], []
+        # The last round offers no tools, so the model has to answer with what it has. While
+        # Google Search is paused, web search runs through the web_search tool instead.
+        offered = []
+        if round_number < MAX_ROUNDS:
+            offered = declarations + ([WEB_SEARCH_TOOL] if not google_search_ready() and web_search_available() else [])
+        model_parts, calls, search_refused = [], [], False
         try:
             async for part in iterate_in_threadpool(stream_gemini_parts(contents, offered)):
-                if "webStatus" in part:
-                    for event in web.finish(failed=True):
-                        yield "tool_call", event
-                    yield "tool_call", {"id": "web-search-unavailable", "server": "Web", "tool": "google_search",
-                                        "title": "Web search unavailable", "status": "error",
-                                        "summary": "The search-enabled request was rate-limited. Retrying without Google Search."}
-                    if needs_web(query, history):
-                        raise GeminiSearchUnavailable("Gemini search was rate-limited")
+                if "searchUnavailable" in part:
+                    search_refused = True
                     continue
                 if "groundingMetadata" in part:
                     grounding = part["groundingMetadata"]
@@ -150,6 +147,8 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
             raise
         for event in web.finish():
             yield "tool_call", event
+        if search_refused:
+            continue  # nothing was generated; ask again with the web_search tool on offer
         if not calls:
             break
         contents.append({"role": "model", "parts": model_parts})
@@ -157,7 +156,29 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
         for call in calls:
             name, arguments = call.get("name", ""), call.get("args") or {}
             entry = registry.get(name)
-            if entry is None:
+            source_id = None
+            if entry is None and name == WEB_SEARCH_TOOL["name"]:
+                search_query = str(arguments.get("query") or query)[:500]
+                event = {"id": f"web-search-{uuid.uuid4().hex[:8]}", "server": "Web", "tool": "web_search",
+                         "title": "Searching the web", "arguments": {"query": search_query}}
+                yield "tool_call", {**event, "status": "running"}
+                try:
+                    text, links, pages = await asyncio.to_thread(search_web, search_query)
+                    is_error = False
+                except Exception:
+                    logger.info("Web search failed", exc_info=True)
+                    text, is_error, links, pages = "Web search is unavailable right now.", True, [], []
+                for link in links:
+                    if len(sources) < MAX_SOURCES:
+                        sources.setdefault(link["url"], link)
+                if links:
+                    yield "sources", {"sources": list(sources.values())}
+                if pages:
+                    yield "evidence", {"sources": [{**page, "kind": "web"} for page in pages]}
+                yield "tool_call", {**event, "status": "error" if is_error else "done",
+                                    "title": "Web search unavailable" if is_error else "Searched the web",
+                                    "summary": None if is_error else f"{len(links)} source links returned."}
+            elif entry is None:
                 text, is_error = "Unknown tool.", True
             else:
                 connection, tool = entry
@@ -181,11 +202,16 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
                 else:
                     yield "tool_call", {**event, "status": "running"}
                     text, is_error = await _run_tool(user_id, connection, tool, arguments)
+                    if not is_error:
+                        source_id = f"T{event['id'][:8]}"
+                        yield "evidence", {"sources": [{"id": source_id, "kind": "tool",
+                            "title": f"{connection['name']} · {tool['title']}", "text": text[:12000]}]}
                     yield "tool_call", {**event, "status": "error" if is_error else "done",
                                         "summary": text[:280]}
             response = {"name": name, "response": {
                 # Marked so the model treats it as data, never as instructions.
-                "source": "external tool (untrusted data)", "is_error": is_error, "result": text}}
+                "source": "external tool (untrusted data)", "is_error": is_error, "result": text,
+                **({"source_id": source_id} if source_id else {})}}
             if call.get("id"):
                 response["id"] = call["id"]
             responses.append({"functionResponse": response})

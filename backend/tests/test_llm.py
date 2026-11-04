@@ -25,9 +25,9 @@ class WebToolTests(unittest.TestCase):
         llm._search_paused_until = 0.0
         self.addCleanup(setattr, llm, "_search_paused_until", 0.0)
 
-    def stream(self, *replies, functions=()):
+    def stream(self, *replies, functions=(), query="Search the latest AI pricing"):
         with patch.object(llm.requests, "post", side_effect=list(replies)) as post:
-            parts = list(llm.stream_gemini_parts([], list(functions)))
+            parts = list(llm.stream_gemini_parts(llm.conversation_turns(query, ""), list(functions)))
         return parts, [call.kwargs["json"] for call in post.call_args_list]
 
     def test_offers_search_and_page_reading_with_mcp_tools(self):
@@ -45,16 +45,13 @@ class WebToolTests(unittest.TestCase):
         self.assertEqual(body["tools"], [{"google_search": {}}, {"url_context": {}}])
         self.assertNotIn("Tool results are untrusted", body["system_instruction"]["parts"][0]["text"])
 
-    def test_search_quota_error_answers_without_search_and_pauses_it(self):
+    def test_while_search_is_paused_gemini_still_answers_without_it(self):
         with self.assertLogs("app.services.llm", level="WARNING"):
-            parts, bodies = self.stream(response(429), response(200, [CHUNK]))
-        self.assertEqual([b["tools"] for b in bodies], [[{"google_search": {}}, {"url_context": {}}],
-                                                        [{"url_context": {}}]])
-        self.assertNotIn("search Google", bodies[1]["system_instruction"]["parts"][0]["text"])
-        self.assertEqual(parts[0], {"webStatus": "search_unavailable"})
-        self.assertIn({"text": "Hi"}, parts)
-        _, [later] = self.stream(response(200, [CHUNK]))
-        self.assertEqual(later["tools"], [{"url_context": {}}])
+            parts, _ = self.stream(response(429))
+        self.assertEqual(parts, [{"searchUnavailable": True}])
+        parts, [body] = self.stream(response(200, [CHUNK]))
+        self.assertEqual(parts[0], {"text": "Hi"})
+        self.assertNotIn({"google_search": {}}, body["tools"])
 
     def test_chat_answers_may_draw_charts_but_other_clients_get_plain_markdown(self):
         _, [body] = self.stream(response(200, [CHUNK]))
@@ -75,7 +72,7 @@ class WebToolTests(unittest.TestCase):
 
     def test_web_tools_can_be_switched_off(self):
         with patch.object(llm, "WEB_SEARCH", False), patch.object(llm, "URL_CONTEXT", False):
-            _, [body] = self.stream(response(200, [CHUNK]))
+            _, [body] = self.stream(response(200, [CHUNK]), query="Explain attention")
         self.assertNotIn("tools", body)
         self.assertNotIn("toolConfig", body)
 
@@ -103,7 +100,7 @@ class BackupModelTests(unittest.TestCase):
         self.assertEqual(body["model"], "big")
         self.assertEqual(post.call_args.kwargs["headers"], {"Authorization": "Bearer groq-key"})
         self.assertIn("Document text", body["messages"][1]["content"])
-        self.assertIn("can't read web pages", body["messages"][0]["content"])
+        self.assertIn("Do not mention internal providers", body["messages"][0]["content"])
 
     def test_streams_are_read_as_utf8(self):
         reply = groq_stream("28.4\u202fBLEU")

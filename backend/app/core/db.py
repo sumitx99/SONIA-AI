@@ -150,12 +150,13 @@ async def search_embeddings(query_embedding, top_k=3, document_ids=None):
         return []
     where, values = "", [query_embedding, top_k]
     if document_ids is not None:
-        where = " WHERE document_id = ANY($3::int[])"
+        where = " WHERE c.document_id = ANY($3::int[])"
         values.append(list(document_ids))
     async with (await get_pool()).acquire() as conn:
         rows = await conn.fetch(
-            f"SELECT chunk_text FROM document_chunks{where} ORDER BY embedding <-> $1 LIMIT $2", *values)
-    return [{"chunk_text": row["chunk_text"]} for row in rows]
+            f"SELECT c.id AS chunk_id, c.document_id, d.filename, c.chunk_text FROM document_chunks c "
+            f"JOIN documents d ON d.id = c.document_id{where} ORDER BY c.embedding <-> $1 LIMIT $2", *values)
+    return [dict(row) for row in rows]
 
 
 async def owned_document_ids(user_id, document_ids=None):

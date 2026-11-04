@@ -64,6 +64,18 @@ class SavedSource(BaseModel):
     url: str = Field(max_length=2048, pattern=r"^https?://")
 
 
+class SavedCitation(BaseModel):
+    """One numbered citation in an answer, as checked against its source."""
+    n: int = Field(ge=1, le=99)
+    kind: Literal["document", "web", "tool", "unknown"]
+    title: str = Field("", max_length=300)
+    quote: str = Field("", max_length=1000)
+    verified: bool = False
+    url: str | None = Field(None, max_length=2048, pattern=r"^https?://")
+    document_id: int | None = None
+    chunk_id: int | None = None
+
+
 class SavedMessage(BaseModel):
     id: str = Field(max_length=100)
     content: str = Field(max_length=100_000)
@@ -73,6 +85,7 @@ class SavedMessage(BaseModel):
     images: list[SavedImage] = Field(default_factory=list, max_length=25)
     tool_calls: list[SavedToolCall] = Field(default_factory=list, max_length=30)
     sources: list[SavedSource] = Field(default_factory=list, max_length=10)
+    citations: list[SavedCitation] = Field(default_factory=list, max_length=40)
 
 
 class ConversationInput(BaseModel):

@@ -61,6 +61,18 @@ export interface WebSource {
   url: string;
 }
 
+/** A numbered citation in an answer; `verified` means its quote was found in the source. */
+export interface Citation {
+  n: number;
+  kind: "document" | "web" | "tool" | "unknown";
+  title: string;
+  quote: string;
+  verified: boolean;
+  url?: string | null;
+  document_id?: number | null;
+  chunk_id?: number | null;
+}
+
 export interface ChatMessage {
   id: string;
   content: string;
@@ -71,6 +83,7 @@ export interface ChatMessage {
   streaming?: boolean;
   tool_calls?: ToolCall[];
   sources?: WebSource[];
+  citations?: Citation[];
 }
 
 export interface ChatSession {
@@ -100,6 +113,13 @@ export async function saveConversation(chat: ChatSession, userId?: string) {
 export async function deleteConversation(id: string) {
   const response = await apiFetch(`/conversations/${encodeURIComponent(id)}`, { method: "DELETE" });
   if (!response.ok) throw await responseError(response);
+}
+
+/** Authenticated source retrieval; never put access tokens or expiring R2 URLs in chat text. */
+export async function loadDocumentSource(documentId: number): Promise<Blob> {
+  const response = await apiFetch(`/documents/${documentId}/source`);
+  if (!response.ok) throw await responseError(response);
+  return response.blob();
 }
 
 
@@ -135,6 +155,7 @@ export interface UploadResponse {
 export interface ChatResponse {
   query: string;
   answer: string;
+  citations?: Citation[];
   images?: ImageAttachment[];
   image_notice?: string | null;
   image_status?: string;
@@ -227,6 +248,8 @@ export interface StreamHandlers {
   onToolCall?: (call: ToolCall) => void;
   /** Web pages the answer used, once at the end. */
   onSources?: (sources: WebSource[]) => void;
+  /** The final answer text (without its citations block) and its checked citations, at the end. */
+  onCitations?: (answer: string, citations: Citation[]) => void;
 }
 
 /**
@@ -249,9 +272,10 @@ export const streamMessage = async (
 
   // An API deployed before streaming existed: fall back to the one-shot endpoint.
   if (response.status === 404) {
-    const { answer, ...meta } = await sendMessage(query, documentIds, history);
+    const { answer, citations, ...meta } = await sendMessage(query, documentIds, history);
     handlers.onMeta?.(meta);
     handlers.onDelta(answer);
+    if (citations) handlers.onCitations?.(answer, citations);
     return { cutOff: false };
   }
   if (!response.ok || !response.body) {
@@ -281,6 +305,7 @@ export const streamMessage = async (
       if (event === "meta") handlers.onMeta?.(payload);
       else if (event === "tool_call") handlers.onToolCall?.(payload);
       else if (event === "sources") handlers.onSources?.(payload.sources);
+      else if (event === "citations") handlers.onCitations?.(payload.answer, payload.citations);
       else if (event === "delta") {
         wroteText = true;
         handlers.onDelta(payload.text);

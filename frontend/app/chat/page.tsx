@@ -8,6 +8,8 @@ import {
   type KeyboardEvent,
 } from "react";
 import { useRouter } from "next/navigation";
+import * as AlertDialog from "@radix-ui/react-alert-dialog";
+import deleteStyles from "@/components/chat/delete-confirmation.module.css";
 import { AnimatePresence, motion, MotionConfig } from "motion/react";
 import {
   ArrowUp,
@@ -58,6 +60,9 @@ export default function SoniaChatInterface() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const [fileError, setFileError] = useState("");
   const [uploadStatus, setUploadStatus] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
@@ -67,7 +72,7 @@ export default function SoniaChatInterface() {
   const current = sessions.find((session) => session.id === currentId);
   const messages = current?.messages ?? [];
 
-  useEffect(() => { setCurrentId(null); }, [session?.user.id]);
+  useEffect(() => { setCurrentId(null); setDeleteTarget(null); }, [session?.user.id]);
 
   useEffect(() => {
     if (historyLoaded && !currentId && sessions.length) setCurrentId(sessions[0].id);
@@ -170,6 +175,10 @@ export default function SoniaChatInterface() {
           update({ tool_calls: toolCalls });
         },
         onSources: (sources) => { start(); update({ sources }); },
+        onCitations: (answer, citations) => {
+          text = answer;
+          update({ content: answer, citations });
+        },
       }, conversationHistory(before));
       toolCalls = toolCalls.map(call => call.status === "running" ? { ...call, status: cutOff ? "error" as const : "done" as const } : call);
       update({
@@ -178,7 +187,9 @@ export default function SoniaChatInterface() {
       });
     } catch (error) {
       if (started) {
-        update({ streaming: false, tool_calls: toolCalls.map(call => call.status === "running" ? { ...call, status: "error" } : call), notice: "The answer was cut off part-way. Ask again to get the rest." });
+        update({ streaming: false, tool_calls: toolCalls.map(call => call.status === "running" ? { ...call, status: "error" } : call),
+          ...(text ? { notice: "The answer was cut off part-way. Ask again to get the rest." }
+            : { content: handleApiError(error), error: true }) });
       } else {
         append(id, {
           id: crypto.randomUUID(),
@@ -250,10 +261,14 @@ export default function SoniaChatInterface() {
   }
 
   async function remove(id: string) {
+    if (deleting || pending?.id === id) return;
+    setDeleting(true);
+    setDeleteError("");
     try {
       await deleteConversation(id);
     } catch (error) {
-      setHistoryError(`The conversation could not be deleted. ${handleApiError(error)}`);
+      setDeleteError(`The conversation could not be deleted. ${handleApiError(error)}`);
+      setDeleting(false);
       return;
     }
     setSessions((previous) => previous.filter((session) => session.id !== id));
@@ -262,6 +277,8 @@ export default function SoniaChatInterface() {
       setInput("");
       setFileError("");
     }
+    setDeleteTarget(null);
+    setDeleting(false);
   }
 
   function saveTitle(id: string) {
@@ -403,7 +420,7 @@ export default function SoniaChatInterface() {
                         className="icon-button"
                         disabled={pending?.id === session.id}
                         aria-label={`Delete ${session.title}`}
-                        onClick={() => remove(session.id)}
+                        onClick={() => { setDeleteError(""); setDeleteTarget({ id: session.id, title: session.title }); }}
                       >
                         <Trash2 size={13} />
                       </button>
@@ -525,7 +542,7 @@ export default function SoniaChatInterface() {
                         <p>Saving will replace the answers after this question.</p>
                         <div><button type="button" onClick={() => setEditingMessageId(null)}>Cancel</button><button type="submit" disabled={!editedPrompt.trim() || !!generatingId || !!pending}>Save &amp; resend</button></div>
                       </form> : message.sender === "bot" && !message.error
-                        ? <MarkdownMessage content={message.content} streaming={message.streaming} />
+                        ? <MarkdownMessage content={message.content} streaming={message.streaming} citations={message.citations} />
                         : <p>{message.content}</p>}
                       {message.sender === "bot" && !message.streaming && <WebSources sources={message.sources} />}
                       {message.notice && <p role="status" style={{ fontSize: 13, color: "var(--muted-foreground)" }}>{message.notice}</p>}
@@ -624,6 +641,26 @@ export default function SoniaChatInterface() {
           </div>
         </main>
       </div>
+      <AlertDialog.Root open={deleteTarget !== null} onOpenChange={open => { if (!open && !deleting) setDeleteTarget(null); }}>
+        <AlertDialog.Portal>
+          <AlertDialog.Overlay className={deleteStyles.overlay} />
+          <AlertDialog.Content className={deleteStyles.dialog} onEscapeKeyDown={event => { if (deleting) event.preventDefault(); }}>
+            <span className={deleteStyles.icon}><Trash2 size={21} /></span>
+            <AlertDialog.Title className={deleteStyles.title}>Delete this conversation?</AlertDialog.Title>
+            <AlertDialog.Description className={deleteStyles.description}>
+              “{deleteTarget?.title}” and all its messages will be removed from your chat history. You can’t undo this action.
+            </AlertDialog.Description>
+            {deleteError && <p className={deleteStyles.error} role="alert">{deleteError}</p>}
+            <div className={deleteStyles.actions}>
+              <AlertDialog.Cancel className={deleteStyles.cancel} disabled={deleting}>Cancel</AlertDialog.Cancel>
+              <button type="button" className={deleteStyles.confirm} disabled={deleting || pending?.id === deleteTarget?.id}
+                onClick={() => { if (deleteTarget) void remove(deleteTarget.id); }}>
+                {deleting ? "Deleting…" : "Delete conversation"}
+              </button>
+            </div>
+          </AlertDialog.Content>
+        </AlertDialog.Portal>
+      </AlertDialog.Root>
     </MotionConfig>
   );
 }

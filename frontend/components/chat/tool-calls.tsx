@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { publicToolCalls } from "@/lib/web-activity";
 import { AlertTriangle, Ban, Check, Globe, Hand, Loader2, Wrench } from "lucide-react";
 import { decideToolCall, handleApiError, type ToolCall, type WebSource } from "@/lib/api";
 
@@ -58,8 +59,9 @@ function ApprovalCard({ call }: { call: ToolCall }) {
 }
 
 /** The tools Sonia used for an answer, and approval prompts for ones that need consent. */
-export function ToolCalls({ calls }: { calls?: ToolCall[] }) {
-  if (!calls?.length) return null;
+export function ToolCalls({ calls: rawCalls }: { calls?: ToolCall[] }) {
+  const calls = publicToolCalls(rawCalls);
+  if (!calls.length) return null;
   return (
     <div className="tool-calls" aria-label="Tools used for this answer">
       {calls.map((call) =>

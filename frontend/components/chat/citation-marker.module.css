@@ -1,0 +1,73 @@
+.marker {
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  margin: 0 1px;
+  padding: 0 4px;
+  border: 1px solid #d8cdbb;
+  border-radius: 8px;
+  background: #f3ecdf;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  color: #5c5245;
+  vertical-align: super;
+  cursor: pointer;
+}
+button.marker:hover { border-color: #b9a88f; background: #ebe1cf; }
+button.marker:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.unverified { border-color: #e2b4a8; background: #fbece7; color: #a13c2b; }
+.pending { opacity: 0.6; cursor: default; }
+.missing { border-style: dashed; color: #8a7e6c; cursor: help; }
+
+.card {
+  z-index: 70;
+  width: min(360px, calc(100vw - 24px));
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  box-shadow: 0 10px 30px rgb(41 40 38 / 0.16);
+  font-size: 13px;
+  color: var(--foreground);
+}
+.header { display: flex; align-items: center; gap: 6px; color: var(--muted-foreground); }
+.title {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  color: var(--foreground);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.host { margin: 2px 0 0 19px; font-size: 11px; color: var(--muted-foreground); }
+.quote {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-left: 3px solid #d8cdbb;
+  border-radius: 0 6px 6px 0;
+  background: #faf6ee;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.footer { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; font-size: 12px; }
+.verified, .warning { display: inline-flex; align-items: center; gap: 5px; margin-right: auto; }
+.verified { color: #4f6b3d; }
+.warning { color: #a13c2b; }
+.link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 12px;
+  color: #5c5245;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.link:disabled { opacity: 0.6; cursor: progress; }
+.error { flex-basis: 100%; margin: 0; font-size: 11px; color: #a13c2b; }
+.arrow { fill: var(--card); }

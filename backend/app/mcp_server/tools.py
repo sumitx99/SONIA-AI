@@ -11,6 +11,7 @@ from app.services.images.image_db import find_document_images
 from app.services.images.image_pipeline import image_attachments
 from app.services.images.image_storage import R2ImageStorage
 from app.services.llm import get_llm_response
+from app.services.answer_verification import check_citations, with_footnotes
 from app.mcp_server.server import current_mcp_user, mcp
 
 READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False)
@@ -47,6 +48,7 @@ async def ask_sonia(question: str, document_ids: list[int] | None = None) -> dic
     context, meta = await answer_context(question, document_ids, document_ids is not None, False,
                                           current_mcp_user())
     answer = await asyncio.to_thread(get_llm_response, question, context)
+    answer = with_footnotes(*await asyncio.to_thread(check_citations, answer, context))
     return {"answer": answer, "images": [
         {"document_id": image["document_id"], "page_number": image["page_number"],
          "caption": image["caption"], "url": image["url"]} for image in meta["images"]]}

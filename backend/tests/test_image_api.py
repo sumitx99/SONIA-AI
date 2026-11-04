@@ -66,7 +66,7 @@ class ImageAPITests(unittest.TestCase):
         candidates = [self.image] if candidates is None else candidates
         with patch.object(context, "get_embedding", return_value=[0.1]), \
              patch.object(context, "get_reranked_context", return_value="Document text") as text_search, \
-             patch.object(chat_api, "get_llm_response", return_value="An answer.") as llm, \
+             patch.object(agent, "stream_gemini_parts", return_value=iter([{"text": "An answer."}])) as llm, \
              patch.object(documents_api.R2ImageStorage, "from_env", return_value=storage or self.storage) as config, \
              patch.object(context, "find_document_images", return_value=candidates) as search, \
              patch.object(context, "rank_contexts", side_effect=lambda query, results, **kwargs: results):
@@ -83,7 +83,7 @@ class ImageAPITests(unittest.TestCase):
         self.assertNotIn("object_key", response["images"][0])
         self.assertEqual(search.call_args.kwargs, {"document_ids": [7], "page_number": 12, "image_number": 2})
         self.assertEqual(text_search.call_args.kwargs["document_ids"], [7])
-        self.assertIn("pixels have not been analyzed", llm.call_args.args[1])
+        self.assertIn("pixels have not been analyzed", llm.call_args.args[0][-1]["parts"][0]["text"])
 
     def test_plain_query_does_not_attach_images(self):
         response, _, search, config, _ = self.chat("Summarize the policy")
@@ -131,7 +131,7 @@ class ImageAPITests(unittest.TestCase):
         response, events, llm = self.stream("Summarize", parts, {"document_ids": [7], "scope_documents": "true"})
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.headers["content-type"].startswith("text/event-stream"))
-        self.assertEqual([name for name, _ in events], ["meta", "delta", "delta", "delta", "done"])
+        self.assertEqual([name for name, _ in events], ["meta", "delta", "delta", "delta", "citations", "done"])
         self.assertEqual(events[0][1]["image_status"], "not_requested")
         self.assertEqual("".join(data["text"] for name, data in events if name == "delta"),
                          "Self-attention **works**.")
@@ -146,7 +146,7 @@ class ImageAPITests(unittest.TestCase):
             {"web": {"uri": "javascript:alert(1)", "title": "Not a web page"}}]}
         _, events, _ = self.stream("Summarize https://example.com/a",
                                    [{"text": "It says hi."}, {"groundingMetadata": grounding}])
-        self.assertEqual([name for name, _ in events], ["meta", "delta", "sources", "done"])
+        self.assertEqual([name for name, _ in events], ["meta", "delta", "sources", "citations", "done"])
         self.assertEqual(events[2][1], {"sources": [{"title": "Page A", "url": "https://example.com/a"}]})
 
     def test_stream_says_so_when_the_model_writes_nothing(self):
@@ -176,7 +176,7 @@ class ImageAPITests(unittest.TestCase):
              patch.object(chat_api, "stream_backup_answer", backup), \
              self.assertLogs("app.api.chat", level="WARNING"):
             _, events, _ = self.stream("Summarize", self.gemini_fails(429))
-        self.assertEqual([name for name, _ in events], ["meta", "tool_call", "delta", "delta", "done"])
+        self.assertEqual([name for name, _ in events], ["meta", "delta", "delta", "citations", "done"])
         self.assertEqual("".join(data["text"] for name, data in events if name == "delta"), "Backup answer.")
         self.assertEqual(backup.call_args.args, ("Summarize", "Document text"))
 
@@ -209,7 +209,7 @@ class ImageAPITests(unittest.TestCase):
     def test_image_failures_keep_text_answers_available(self):
         with patch.object(context, "get_embedding", return_value=[0.1]), \
              patch.object(context, "get_reranked_context", return_value="Document text"), \
-             patch.object(chat_api, "get_llm_response", return_value="Text answer"), \
+             patch.object(agent, "stream_gemini_parts", return_value=iter([{"text": "Text answer"}])), \
              patch.object(documents_api.R2ImageStorage, "from_env", side_effect=ValueError("Incomplete config")), \
              self.assertLogs("app.services.context", level="ERROR"):
             response = self.client.post("/chat", data={"query": "Show image"})

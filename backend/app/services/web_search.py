@@ -1,21 +1,11 @@
-"""Decide when fresh web information is required and read Groq's source metadata."""
+"""Read Groq browser-search results: source links, and the text of pages the model opened."""
 import re
+
 from app.services.web_activity import safe_url
 
-
-def needs_web(query, history=None):
-    text = query.lower()
-    explicit = re.search(r'https?://|\b(?:web|browse|search|latest|current|today|news|recent|live)\b|आज|ताज़ा', text)
-    if explicit:
-        return True
-    if re.search(r'\b(?:document|pdf|uploaded|provided context)\b', text):
-        return False
-    if re.search(r'\b(?:price|pricing|subscription|plans|cost|weather|exchange rate|release date)\b|कीमत|मौसम', text):
-        return True
-    if len(text) < 100 and re.search(r'^(?:what about|how about|and |aur |or |iska|uska)', text.strip()):
-        recent = [turn['content'] for turn in (history or []) if turn['sender'] == 'user'][-3:]
-        return any(needs_web(previous) for previous in recent)
-    return False
+# The browser shows pages as numbered lines ("L12: text") with links like 【3†title†host】.
+_LINE_NUMBER = re.compile(r"(?m)^L\d+: ?")
+_LINK = re.compile(r"【\d+†([^†】]*)(?:†[^】]*)?】")
 
 
 def groq_sources(message):
@@ -29,3 +19,15 @@ def groq_sources(message):
             if url and url not in result and len(result) < 10:
                 result[url] = {'url': url, 'title': str(item.get('title') or url)[:200]}
     return list(result.values())
+
+
+def groq_pages(message):
+    """Pages the model opened, as plain text, so quotes from them can be checked."""
+    pages = {}
+    for tool in message.get('executed_tools') or []:
+        for item in (tool.get('search_results') or {}).get('results') or []:
+            url, text = safe_url(item.get('url')), item.get('content')
+            if url and isinstance(text, str) and text.strip() and url not in pages:
+                pages[url] = {'url': url, 'title': str(item.get('title') or url)[:200],
+                              'text': _LINK.sub(r'\1', _LINE_NUMBER.sub('', text))}
+    return list(pages.values())

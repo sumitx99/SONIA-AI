@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import json
 from functools import lru_cache
 from app.core.db import search_embeddings
 
@@ -59,6 +60,14 @@ async def get_reranked_context(query: str, query_embedding: list, document_ids=N
     
     # The cross-encoder is CPU-bound; keep it off the event loop.
     top_results = await asyncio.to_thread(rank_contexts, query, initial_results, limit=FINAL_CONTEXT_COUNT)
-    context = "\n\n---\n\n".join(result["chunk_text"] for result in top_results)
+    # Keep provenance attached to each passage; never guess pages for legacy chunks.
+    sources = []
+    for result in top_results:
+        if not all(key in result for key in ("chunk_id", "document_id", "filename")):
+            continue
+        sources.append({"id": f"D{result['chunk_id']}", "title": result["filename"],
+                        "document_id": result["document_id"], "chunk_id": result["chunk_id"],
+                        "text": result["chunk_text"], "kind": "document"})
+    context = "SONIA_DOCUMENT_EVIDENCE\n" + json.dumps({"sources": sources}, ensure_ascii=False)
     
     return context

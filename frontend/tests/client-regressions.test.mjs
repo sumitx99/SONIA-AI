@@ -154,3 +154,45 @@ test('web activity and sources reach the UI before answer text',async(t)=>{
  await client().streamMessage('pricing',[],{onToolCall:c=>received.push(c.status),onSources:s=>received.push(s[0].url),onDelta:()=>received.push('answer')});
  assert.deepEqual(received,['running','https://ai.google.dev/pricing','done','answer']);
 });
+
+const webActivity = loadTypeScript('../lib/web-activity.ts');
+test('saved model-switch and quota diagnostics stay out of the account UI',()=>{
+ const old=[{id:'web-backup',server:'Web',tool:'google_search',title:'Switching to Groq',status:'done',summary:'Gemini failed'}, {id:'web-search-unavailable',server:'Web',tool:'google_search',title:'Quota reached',status:'error'}];
+ assert.deepEqual(webActivity.publicToolCalls(old,'hi'),[]);
+ assert.deepEqual(webActivity.publicToolCalls(old,'Current pricing?'),[]);
+});
+test('web progress keeps queries but hides internal models and provider errors',()=>{
+ const calls=[{id:'web-search',server:'Web',tool:'browser_search',title:'Trying web search · gpt-oss-120b',status:'running',summary:'Groq quota',arguments:{query:'Compare PDF with current data',model:'gpt-oss-120b'}}];
+ const clean=webActivity.publicToolCalls(calls,'Compare PDF with latest data');
+ assert.equal(clean[0].title,'Searching the web');
+ assert.deepEqual(clean[0].arguments,{query:'Compare PDF with current data'});
+ assert.doesNotMatch(JSON.stringify(clean),/Groq|gpt-oss/);
+ const mcp={id:'mcp',server:'My notes',tool:'read',title:'Read note',status:'done'};
+ assert.deepEqual(webActivity.publicToolCalls([mcp],'hi'),[mcp]);
+});
+
+const remarkCitations = loadTypeScript('../lib/markdown/remark-citations.ts').default;
+test('citation markers become numbered superscripts, but not inside code or links', () => {
+  const root = { type: 'root', children: [
+    { type: 'paragraph', children: [text('BLEU was 28.4 [1][2].'), { type: 'inlineCode', value: 'arr[1]' },
+      { type: 'link', url: 'https://x.example', children: [text('see [3]')] }] },
+  ] };
+  remarkCitations()(root);
+  const nodes = root.children[0].children;
+  assert.deepEqual(nodes.map((node) => node.type), ['text', 'citation', 'citation', 'text', 'inlineCode', 'link']);
+  assert.equal(nodes[1].data.hProperties['data-citation'], '1');
+  assert.equal(nodes[3].value, '.');
+  assert.equal(nodes[4].value, 'arr[1]');
+  assert.equal(nodes[5].children[0].value, 'see [3]');
+});
+
+test('the stream hands over the final answer and its checked citations', async (t) => {
+  const citation = { n: 1, kind: 'web', title: 'Pricing', quote: 'costs $0.25', verified: true, url: 'https://x.example' };
+  const events = [['delta', { text: 'It costs $0.25 [1].\n\n```citations\n[]\n```' }],
+                  ['citations', { answer: 'It costs $0.25 [1].', citations: [citation] }], ['done', {}]];
+  t.mock.method(globalThis, 'fetch', async () => new Response(events.map(([name, data]) => `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`).join(''),
+    { headers: { 'Content-Type': 'text/event-stream' } }));
+  let final;
+  await client().streamMessage('price', [], { onDelta: () => {}, onCitations: (answer, citations) => { final = { answer, citations }; } });
+  assert.deepEqual(final, { answer: 'It costs $0.25 [1].', citations: [citation] });
+});

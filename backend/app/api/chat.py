@@ -14,8 +14,9 @@ from app.core.auth import current_user
 from app.mcp_client.agent import answer_with_tools, available_tools, resolve_approval
 from app.services.context import answer_context
 from app.services.chat_memory import parse_history
+from app.services.answer_verification import check_citations
 from app.services.llm import (NO_ANSWER, BackupUnavailable, backup_configured, gemini_unavailable,
-                              get_llm_response, stream_backup_answer, WebSearchUnavailable)
+                              stream_backup_answer, WebSearchUnavailable)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -29,9 +30,13 @@ async def chat(query: str = Form(...), document_ids: list[int] | None = Form(Non
     try:
         logger.info(f"Received query: '{query}'")
         context, meta = await answer_context(query, document_ids, scope_documents, include_images, user_id)
-        answer = await asyncio.to_thread(get_llm_response, query, context, *([turns] if turns else []))
+        declarations, registry = await _load_tools(user_id)
+        answer, citations = "", []
+        async for name, data in _answer_events(user_id, query, context, declarations, registry, turns):
+            if name == "citations":
+                answer, citations = data["answer"], data["citations"]
         logger.info("Generated LLM response.")
-        return {"query": query, "answer": answer, **meta}
+        return {"query": query, "answer": answer or NO_ANSWER, "citations": citations, **meta}
 
     except HTTPError as e:
         logger.error(f"HTTPError during LLM call: {e}")
@@ -43,7 +48,7 @@ async def chat(query: str = Form(...), document_ids: list[int] | None = Form(Non
 
 def _failure_message(error: Exception) -> str:
     if isinstance(error, WebSearchUnavailable):
-        return "Live web search is unavailable across the configured providers. Please try again later; current information could not be verified."
+        return "Web search could not be completed right now. Please try again later; current information could not be verified."
     if isinstance(error, BackupUnavailable) or gemini_unavailable(error):
         return "Sonia's AI models are busy or have used up today's free quota. Please try again in a little while."
     return "The answer was interrupted. Please try again."
@@ -59,9 +64,10 @@ async def chat_stream(query: str = Form(...), document_ids: list[int] | None = F
                       user_id: str = Depends(current_user), history: str | None = Form(None)):
     """Like /chat, but streams the answer as server-sent events while Gemini writes it.
 
-    Events: `meta` (images and status, once), `delta` ({"text"}, repeatedly), then `done`,
-    or `error` ({"detail"}) if the answer breaks off part-way. The model may read web pages, listed
-    in a `sources` event at the end. With MCP connections it may also call tools, reported as
+    Events: `meta` (images and status, once), `delta` ({"text"}, repeatedly), `citations`
+    ({"answer", "citations"}: the final text without its citations block, and each checked
+    citation), then `done`, or `error` ({"detail"}) if the answer breaks off part-way. The model
+    may read web pages, listed in `sources` events. With MCP connections it may also call tools, reported as
     `tool_call` and, for tools that need consent, `approval_required`. If Gemini is out of quota or
     down before anything was shown, a backup model answers instead.
     """
@@ -77,49 +83,70 @@ async def chat_stream(query: str = Form(...), document_ids: list[int] | None = F
         logger.error(f"An unexpected error occurred during chat: {e}")
         raise HTTPException(status_code=500, detail=f"An internal server error occurred: {str(e)}")
 
-    try:
-        declarations, registry = await available_tools(user_id)
-    except Exception:
-        # Connections must never stop a plain answer (e.g. MCP_SECRET_KEY missing).
-        logger.exception("Couldn't load MCP connections; answering without tools")
-        declarations, registry = [], {}
+    declarations, registry = await _load_tools(user_id)
 
     async def events():
         yield _sse("meta", meta)
         try:
-            wrote_any = shown_any = False
-            try:
-                async for name, data in answer_with_tools(user_id, query, context, declarations, registry, **({"history": turns} if turns else {})):
-                    shown_any = shown_any or name == "delta" or (name == "tool_call" and data.get("server") != "Web")
-                    wrote_any = wrote_any or name == "delta"
-                    yield _sse(name, data)
-            except Exception as error:
-                # Until the user has seen something, a backup model can still answer; after that
-                # the answer is cut off rather than started again.
-                if shown_any or not gemini_unavailable(error) or not backup_configured():
-                    raise
-                yield _sse("tool_call", {"id": "web-backup", "server": "Web", "tool": "google_search",
-                                         "title": "Switching to Groq", "status": "done",
-                                         "summary": "Gemini is unavailable. Trying the configured Groq fallback."})
-                logger.warning("Gemini unavailable (%s); answering with a backup model", error)
-                async for kind, value in iterate_in_threadpool(stream_backup_answer(query, context, *([turns] if turns else []))):
-                    if kind == "model":
-                        logger.info("Backup model %s is answering", value)
-                    elif kind in {"tool_call", "sources"}:
-                        yield _sse(kind, value)
-                    else:
-                        wrote_any = True
-                        yield _sse("delta", {"text": value})
-            if not wrote_any:
-                yield _sse("delta", {"text": NO_ANSWER})
+            async for name, data in _answer_events(user_id, query, context, declarations, registry, turns):
+                yield _sse(name, data)
             yield _sse("done", {})
         except Exception as error:
-            logger.exception("Streaming the answer failed")
+            logger.exception("Generating the answer failed")
             yield _sse("error", {"detail": _failure_message(error)})
 
     # No buffering by proxies, so each piece reaches the browser as soon as it is written.
     return StreamingResponse(events(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+async def _load_tools(user_id):
+    try:
+        return await available_tools(user_id)
+    except Exception:
+        logger.exception("Couldn't load MCP connections; answering without tools")
+        return [], {}
+
+
+async def _answer_events(user_id, query, context, declarations, registry, turns):
+    """The answer's events, streamed as written, ending with its checked citations."""
+    draft, sources, evidence = [], {}, []
+    shown = False  # text or a non-web tool step the user has already seen
+    try:
+        async for name, data in answer_with_tools(user_id, query, context, declarations, registry,
+                                                  **({"history": turns} if turns else {})):
+            if name == "evidence":
+                evidence.extend(data["sources"])
+                continue
+            if name == "delta":
+                draft.append(data["text"])
+            elif name == "sources":
+                sources.update({item["url"]: item for item in data["sources"]})
+            shown = shown or name == "delta" or (name == "tool_call" and data.get("server") != "Web")
+            yield name, data
+    except Exception as error:
+        # A backup may answer only if nothing was shown and no external action ran.
+        if shown or not gemini_unavailable(error) or not backup_configured():
+            raise
+        logger.warning("Gemini unavailable (%s); answering with a backup model", error)
+        async for kind, value in iterate_in_threadpool(stream_backup_answer(query, context, *([turns] if turns else []))):
+            if kind == "model":
+                logger.info("Backup model %s is answering", value)
+            elif kind == "evidence":
+                evidence.extend(value["sources"])
+            elif kind == "text":
+                draft.append(value)
+                yield "delta", {"text": value}
+            else:
+                if kind == "sources":
+                    sources.update({item["url"]: item for item in value["sources"]})
+                yield kind, value
+    if not draft:
+        yield "delta", {"text": NO_ANSWER}
+        return
+    answer, citations = await asyncio.to_thread(check_citations, "".join(draft), context,
+                                                list(sources.values()), evidence)
+    yield "citations", {"answer": answer, "citations": citations}
 
 
 class ApprovalInput(BaseModel):
