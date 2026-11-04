@@ -14,6 +14,7 @@ import logging
 import re
 import uuid
 
+import requests
 from fastapi.concurrency import iterate_in_threadpool
 
 from app.services.llm import (WEB_SEARCH_TOOL, conversation_turns, google_search_ready, search_web,
@@ -48,7 +49,30 @@ def _function_name(index: int, tool_name: str) -> str:
 
 
 def _clean_schema(schema: dict) -> dict:
-    schema = {key: value for key, value in (schema or {}).items() if key != "$schema"}
+    """A tool's input schema as Gemini accepts it.
+
+    Gemini rejects schemas whose $refs loop back on themselves (MCP servers such as Zapier use one
+    for "any JSON value"). Local $defs are inlined, and a reference that would loop becomes an
+    open schema ({}), which accepts any value just like the loop did.
+    """
+    schema = dict(schema or {})
+    definitions = {**schema.pop("definitions", {}), **schema.pop("$defs", {})}
+
+    def inline(node, resolving):
+        if isinstance(node, list):
+            return [inline(item, resolving) for item in node]
+        if not isinstance(node, dict):
+            return node
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith(("#/$defs/", "#/definitions/")):
+            name = ref.rsplit("/", 1)[-1]
+            if name in resolving or name not in definitions:
+                return {}
+            return inline(definitions[name], resolving | {name})
+        return {key: inline(value, resolving) for key, value in node.items()
+                if key not in ("$schema", "$defs", "definitions")}
+
+    schema = inline(schema, frozenset())
     schema.setdefault("type", "object")
     return schema
 
@@ -141,6 +165,17 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
                     calls.append(part["functionCall"])
                 elif part.get("text") and not part.get("thought"):
                     yield "delta", {"text": part["text"]}
+        except requests.HTTPError as error:
+            # Gemini rejects the whole request when one connected tool's schema is invalid. That
+            # happens before anything is generated, so ask again without the connected tools.
+            if error.response is not None and error.response.status_code == 400 and declarations:
+                logger.warning("Gemini rejected the connected tools; answering without them: %s",
+                               error.response.text[:300])
+                declarations = []
+                continue
+            for event in web.finish(failed=True):
+                yield "tool_call", event
+            raise
         except Exception:
             for event in web.finish(failed=True):
                 yield "tool_call", event

@@ -1,6 +1,7 @@
 """Sonia as an MCP client: URL safety, secret storage, the tool loop and approvals."""
 
 import asyncio
+import json
 import importlib
 import os
 import socket
@@ -9,6 +10,7 @@ import types
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
+import requests
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
@@ -168,6 +170,47 @@ class ToolLoopTests(unittest.TestCase):
             asyncio.run(main())
         self.assertEqual(len(seen), agent.MAX_ROUNDS + 1)
         self.assertEqual(seen[-1][1], [])
+
+
+class ToolSchemaTests(unittest.TestCase):
+    # Zapier describes "any JSON value" with a $ref that loops back on itself; Gemini rejects that.
+    ANY_JSON = {"anyOf": [{"type": "string"}, {"type": "null"},
+                          {"type": "array", "items": {"$ref": "#/$defs/json"}},
+                          {"type": "object", "additionalProperties": {"$ref": "#/$defs/json"}}]}
+
+    def test_recursive_definitions_are_inlined_and_loops_left_open(self):
+        schema = {"$schema": "https://json-schema.org/draft/2020-12/schema", "type": "object",
+                  "$defs": {"json": self.ANY_JSON, "name": {"type": "string"}},
+                  "required": ["action"],
+                  "properties": {"action": {"$ref": "#/$defs/name"}, "params": {"$ref": "#/$defs/json"}}}
+        clean = agent._clean_schema(schema)
+        text = json.dumps(clean)
+        self.assertNotIn("$ref", text)
+        self.assertNotIn("$defs", text)
+        self.assertNotIn("$schema", text)
+        self.assertEqual(clean["properties"]["action"], {"type": "string"})
+        params = clean["properties"]["params"]["anyOf"]
+        self.assertEqual(params[2], {"type": "array", "items": {}})
+        self.assertEqual(params[3], {"type": "object", "additionalProperties": {}})
+
+    def test_a_rejected_tool_list_does_not_lose_the_answer(self):
+        declarations, tools = registry("allow")
+        seen = []
+
+        def gemini(contents, offered):
+            seen.append([item["name"] for item in offered])
+            if len(seen) == 1:
+                raise requests.HTTPError(response=Mock(status_code=400, text="ref loops are not supported"))
+            return iter(ANSWER)
+
+        async def main():
+            return [event async for event in agent.answer_with_tools("user-1", "q", "c", declarations, tools)]
+        with patch.object(agent, "stream_gemini_parts", gemini), \
+             patch.object(agent, "web_search_available", return_value=False), \
+             self.assertLogs("app.mcp_client.agent", level="WARNING"):
+            events = asyncio.run(main())
+        self.assertEqual(seen, [["c0__create_note"], []])
+        self.assertEqual(events, [("delta", {"text": "Done."})])
 
 
 class ConnectionsAPITests(unittest.TestCase):
