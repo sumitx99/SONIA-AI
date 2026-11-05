@@ -21,6 +21,7 @@ MAX_QUOTE_WORDS = 25
 MAX_FETCHES = 6
 _WIDE_MARKER = re.compile(r"【(\d{1,2})】")
 _BLOCK = re.compile(r"\n*```citations[^\n]*\n(.*?)(?:\n```[^\n]*|\Z)", re.S)
+_ANSWER_URL = re.compile(r"""https?://[^\s<>()\[\]"'`*]+""", re.IGNORECASE)
 
 
 def document_evidence(context):
@@ -54,6 +55,25 @@ def _normalized(text: str) -> str:
     return " ".join(text.casefold().split())
 
 
+def _url_key(url: str) -> str:
+    # Models sometimes type a source URL with typographic dashes (e.g. U+2011 in "sk‑world"),
+    # which browsers resolve to a different host. Compare URLs with every dash as "-".
+    url = "".join("-" if unicodedata.category(ch) == "Pd" else ch for ch in unicodedata.normalize("NFKC", url))
+    return url.rstrip(".,;:!?").rstrip("/")
+
+
+def _restore_source_urls(body: str, known) -> str:
+    """Rewrites URLs that only differ from a known source in typography to that exact source."""
+    exact = {_url_key(url): url for url in known}
+
+    def restore(match):
+        written = match.group()
+        trimmed = written.rstrip(".,;:!?")
+        url = exact.get(_url_key(trimmed))
+        return url + written[len(trimmed):] if url and url != trimmed else written
+    return _ANSWER_URL.sub(restore, body) if exact else body
+
+
 def _fetch(url: str):
     try:
         return read_source(url)
@@ -77,6 +97,11 @@ def check_citations(answer: str, context: str, web_sources=(), evidence=()) -> t
     pages = {item["url"]: item for item in evidence if item.get("kind") == "web" and safe_url(item.get("url"))}
     allowed = {source["url"]: source for source in web_sources if safe_url(source.get("url"))}
     allowed.update(pages)
+    body = _restore_source_urls(body, allowed)
+    canonical = {_url_key(url): url for url in allowed}
+    for entry in entries:
+        if isinstance(entry, dict) and isinstance(entry.get("source"), str) and entry["source"] not in allowed:
+            entry["source"] = canonical.get(_url_key(entry["source"]), entry["source"])
 
     cited = [entry for entry in entries[:MAX_CITATIONS] if isinstance(entry, dict)]
     to_fetch = list(dict.fromkeys(entry.get("source") for entry in cited
