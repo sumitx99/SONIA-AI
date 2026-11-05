@@ -14,6 +14,22 @@ from test_mcp_client import registry, CALL, ANSWER
 
 
 class ToolFallbackTests(unittest.TestCase):
+    def test_unreadable_link_still_gets_a_chat_reply_when_model_returns_no_text(self):
+        url = "https://example.com/"
+        call = {"functionCall": {"name": "read_web_page", "args": {"url": url}}}
+
+        async def run():
+            return [event async for event in chat._answer_events("user1", f"Rate {url}", "", [], {}, [])]
+
+        with patch.object(agent, "URL_CONTEXT", True), \
+             patch.object(agent, "stream_gemini_parts", side_effect=[iter([call]), iter([])]), \
+             patch.object(agent, "read_source", return_value=""):
+            events = asyncio.run(run())
+
+        self.assertEqual([data["status"] for kind, data in events if kind == "tool_call"], ["running", "error"])
+        self.assertEqual(events[-1][0], "delta")
+        self.assertIn("Share a screenshot", events[-1][1]["text"])
+
     def test_api_does_not_drop_connected_tools_for_a_plain_fallback(self):
         async def failed(*args, **kwargs):
             raise requests.Timeout("tool generation unavailable")

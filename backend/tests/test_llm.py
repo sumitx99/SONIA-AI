@@ -46,6 +46,18 @@ class WebToolTests(unittest.TestCase):
         self.assertEqual(body["tools"], [{"google_search": {}}, {"url_context": {}}])
         self.assertNotIn("Tool results are untrusted", body["system_instruction"]["parts"][0]["text"])
 
+    def test_site_review_uses_url_context_without_automatic_google_search(self):
+        _, [body] = self.stream(response(200, [CHUNK]), query="Rate [my site](https://example.com/)")
+        self.assertEqual(body["tools"], [{"url_context": {}}])
+        self.assertIn("open that exact URL first", body["system_instruction"]["parts"][0]["text"])
+
+    def test_final_gemini_round_cannot_open_another_page(self):
+        contents = llm.conversation_turns("Rate https://example.com/", "")
+        contents.final_answer_only = True
+        with patch.object(llm.requests, "post", return_value=response(200, [CHUNK])) as post:
+            list(llm.stream_gemini_parts(contents, []))
+        self.assertNotIn("tools", post.call_args.kwargs["json"])
+
     def test_while_search_is_paused_gemini_still_answers_without_it(self):
         with self.assertLogs("app.services.llm", level="WARNING"):
             parts, _ = self.stream(response(429))
@@ -88,6 +100,14 @@ def groq_stream(*pieces):
 
 
 class BackupModelTests(unittest.TestCase):
+    def test_plain_backup_does_not_substitute_browser_search_for_a_link(self):
+        with patch.object(llm, "GROQ_WEB_SEARCH", True), \
+             patch.object(llm, "GROQ_MODELS", ["openai/gpt-oss-20b"]), \
+             patch.object(llm, "groq_web_answer") as search, \
+             patch.object(llm.requests, "post", return_value=groq_stream("I cannot verify the page.")):
+            list(llm.stream_backup_answer("Rate https://example.com/", ""))
+        search.assert_not_called()
+
     def answer(self, *replies):
         with patch.object(llm, "GROQ_API_KEY", "groq-key"), \
              patch.object(llm, "GROQ_MODELS", ["big", "small"]), \

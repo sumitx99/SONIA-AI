@@ -1,9 +1,17 @@
 """User-visible web activity derived only from provider tool/grounding events."""
+import re
 from urllib.parse import urlsplit
 
 KINDS = {'GOOGLE_SEARCH_WEB': ('google_search', 'Searching the web'),
          'GOOGLE_SEARCH_IMAGE': ('google_search_images', 'Searching web images'),
          'URL_CONTEXT': ('url_context', 'Reading web pages')}
+
+_QUESTION_URL = re.compile(r"""https?://[^\s<>()\[\]"']+""", re.IGNORECASE)
+
+
+def requested_urls(question: str) -> set[str]:
+    return {url for match in _QUESTION_URL.finditer(question)
+            if (url := safe_url(match.group().rstrip(".,;!?")))}
 
 
 def safe_url(value):

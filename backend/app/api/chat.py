@@ -17,6 +17,7 @@ from app.services.chat_memory import parse_history
 from app.services.answer_verification import check_citations
 from app.services.llm import (NO_ANSWER, BackupUnavailable, backup_configured, gemini_unavailable,
                               stream_backup_answer, WebSearchUnavailable)
+from app.services.web_activity import requested_urls
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -114,6 +115,10 @@ async def _load_tools(user_id):
 async def _answer_events(user_id, query, context, declarations, registry, turns):
     """The answer's events, streamed as written, ending with its checked citations."""
     draft, sources, evidence = [], {}, []
+    linked_pages = requested_urls(query)
+    failed_pages = set()
+    page_unreadable = ("I couldn’t read the content at the link you shared. "
+                       "Share a screenshot or the page text so I can review it.")
     shown = False  # text or a non-web tool step the user has already seen
     try:
         async for name, data in answer_with_tools(user_id, query, context, declarations, registry,
@@ -125,9 +130,20 @@ async def _answer_events(user_id, query, context, declarations, registry, turns)
                 draft.append(data["text"])
             elif name == "sources":
                 sources.update({item["url"]: item for item in data["sources"]})
+            elif name == "tool_call" and data.get("tool") in {"read_web_page", "url_context"}:
+                url = (data.get("arguments") or {}).get("url")
+                if isinstance(url, str) and url in linked_pages:
+                    if data.get("status") == "error":
+                        failed_pages.add(url)
+                    elif data.get("status") == "done":
+                        failed_pages.discard(url)
             shown = shown or name == "delta" or (name == "tool_call" and data.get("server") != "Web")
             yield name, data
     except Exception as error:
+        if (not shown and linked_pages and linked_pages <= failed_pages
+                and (isinstance(error, BackupUnavailable) or gemini_unavailable(error))):
+            yield "delta", {"text": page_unreadable}
+            return
         # A backup may answer only if nothing was shown and no external action ran.
         # Connected-tool fallbacks belong to the agent, which preserves the registry.
         # Never replace them with a plain answer path that has no connected tools.
@@ -146,8 +162,9 @@ async def _answer_events(user_id, query, context, declarations, registry, turns)
                 if kind == "sources":
                     sources.update({item["url"]: item for item in value["sources"]})
                 yield kind, value
-    if not draft:
-        yield "delta", {"text": NO_ANSWER}
+    if not "".join(draft).strip():
+        message = page_unreadable if linked_pages and linked_pages <= failed_pages else NO_ANSWER
+        yield "delta", {"text": message}
         return
     answer, citations = await asyncio.to_thread(check_citations, "".join(draft), context,
                                                 list(sources.values()), evidence)

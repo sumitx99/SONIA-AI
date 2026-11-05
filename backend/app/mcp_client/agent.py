@@ -21,7 +21,7 @@ from fastapi.concurrency import iterate_in_threadpool
 from app.services.llm import (READ_WEB_PAGE_TOOL, URL_CONTEXT, WEB_SEARCH_TOOL, conversation_turns, google_search_ready, search_web,
                               stream_gemini_parts, web_search_available, stream_tool_backup,
                               backup_configured, gemini_unavailable)
-from app.services.web_activity import WebActivity, safe_url
+from app.services.web_activity import WebActivity, requested_urls, safe_url
 from app.services.source_reader import read_source
 from app.services.images.web_images import IMAGE_SEARCH_TOOL, configured as image_search_configured, search_and_store
 from app.mcp_client import store
@@ -34,7 +34,6 @@ MAX_ROUNDS = 5
 MAX_TOOLS = 64
 MAX_SOURCES = 10
 MAX_DIRECT_PAGES = 3
-_QUESTION_URL = re.compile(r"""https?://[^\s<>()\[\]"']+""", re.IGNORECASE)
 APPROVAL_TIMEOUT = 120
 # approval id -> (user id, future resolved with True/False). One API instance, so in memory.
 _approvals: dict[str, tuple[str, asyncio.Future]] = {}
@@ -142,8 +141,7 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
     """Yields (event, data) while answering; text arrives as "delta" events."""
     contents = conversation_turns(query, context, history)
     sources: dict[str, dict] = {}
-    question_urls = {url for match in _QUESTION_URL.finditer(query)
-                     if (url := safe_url(match.group().rstrip(".,;!?")))}
+    question_urls = requested_urls(query)
     attempted_pages = set()
     web = WebActivity()
     image_searches, image_count = 0, 0
@@ -173,8 +171,10 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
         # The last round offers no tools, so the model has to answer with what it has. While
         # Google Search is paused, web search runs through the web_search tool instead.
         offered = []
+        contents.final_answer_only = round_number == MAX_ROUNDS
         if round_number < MAX_ROUNDS:
-            offered = declarations + ([WEB_SEARCH_TOOL] if not google_search_ready() and web_search_available() else [])
+            offered = declarations + ([WEB_SEARCH_TOOL]
+                                      if (question_urls or not google_search_ready()) and web_search_available() else [])
             if URL_CONTEXT and question_urls - attempted_pages and len(attempted_pages) < MAX_DIRECT_PAGES:
                 offered = offered + [READ_WEB_PAGE_TOOL]
             if image_search_configured() and image_searches < 2 and image_count < 3:
@@ -244,7 +244,7 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
             yield "tool_call", event
         if search_refused:
             continue  # nothing was generated; ask again with the web_search tool on offer
-        if not calls:
+        if not calls or contents.final_answer_only:
             break
         contents.append({"role": "model", "parts": model_parts})
         responses = []
@@ -299,7 +299,8 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
                         page_text = ""
                     is_error = not page_text
                     text = f"Source URL: {url}\nPage text:\n{page_text}" if page_text else (
-                        "The requested page did not return readable text. Do not claim it was reviewed.")
+                        "The requested page did not return readable text. If asked to rate the page, "
+                        "explain this limitation and ask for screenshots. Do not search for reviews as a substitute.")
                     if page_text:
                         link = {"url": url, "title": url}
                         if len(sources) < MAX_SOURCES:

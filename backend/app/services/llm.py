@@ -7,6 +7,7 @@ import time
 import requests
 
 from app.services.web_search import groq_pages, groq_sources
+from app.services.web_activity import requested_urls
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +125,8 @@ WEB_INSTRUCTION = """
 Web: you can read web pages whose links appear in the user's question{search}.
 - When asked to rate, review, or summarize a linked page, open that exact URL first
   and base the answer on its contents. Look for third-party reviews only if requested.
-  If you cannot read the page, say what you could access and limit the evaluation to it.
+  Treat "rate this site" as a request for your own evaluation. If the page cannot be
+  read, explain the limitation and ask for screenshots for visual feedback.
 - Decide whether research is necessary from the meaning of the CURRENT request and its context.
 - Do not search for conversational acknowledgements, greetings, creative tasks or facts already
   supported by the provided document. Do search for missing factual evidence and changing facts.
@@ -184,6 +186,7 @@ class ConversationTurns(list):
         super().__init__(turns)
         self.question = question
         self.backup_tool_names: tuple[str, ...] | None = None
+        self.final_answer_only = False
 
 
 def reply_language_policy(question: str) -> str:
@@ -248,10 +251,13 @@ def _web_tools(search: bool, requested: bool) -> list:
 
 
 def _post_stream(contents: list, function_declarations: list, search: bool) -> requests.Response:
-    web = _web_tools(search, True)
+    web = _web_tools(search, not getattr(contents, "final_answer_only", False))
     instruction = SYSTEM_INSTRUCTION + CHART_INSTRUCTION + CITATION_INSTRUCTION + reply_language_policy(getattr(contents, "question", ""))
-    if web:
-        instruction += WEB_INSTRUCTION.format(search=", and search Google" if search else "")
+    if web or any(tool["name"] in (READ_WEB_PAGE_TOOL["name"], WEB_SEARCH_TOOL["name"])
+                  for tool in function_declarations):
+        search_description = ", and search Google" if search else (
+            ", and use web_search" if WEB_SEARCH_TOOL in function_declarations else "")
+        instruction += WEB_INSTRUCTION.format(search=search_description)
     if function_declarations:
         instruction += TOOL_INSTRUCTION
     body = {"system_instruction": {"parts": [{"text": instruction}]}, "contents": contents}
@@ -279,7 +285,10 @@ def stream_gemini_parts(contents: list, function_declarations: list):
     which are not parts and must not be sent back.
     """
     global _search_paused_until
-    search = google_search_ready()
+    # A linked page is read directly. The agent can still call web_search when
+    # the user also asks for external research.
+    search = (not getattr(contents, "final_answer_only", False) and google_search_ready()
+              and not requested_urls(getattr(contents, "question", "")))
     response = _post_stream(contents, function_declarations, search)
     if response.status_code == 429 and search:
         # Search has its own quota. Nothing was generated yet, so the caller asks again with
@@ -476,7 +485,7 @@ def stream_backup_answer(query: str, context: str, history=None):
     Yields ("model", id) once, then ("text", piece) as the answer streams. Raises
     BackupUnavailable when every model is out of quota or unreachable.
     """
-    if GROQ_WEB_SEARCH and any(model in GROQ_WEB_MODELS for model in GROQ_MODELS):
+    if not requested_urls(query) and GROQ_WEB_SEARCH and any(model in GROQ_WEB_MODELS for model in GROQ_MODELS):
         yield from groq_web_answer(query, context, history)
         return
     messages = [
