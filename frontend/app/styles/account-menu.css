@@ -114,6 +114,8 @@
 .connections-list { display:flex; flex-direction:column; gap:8px; }
 .connections-list li { display:flex; align-items:center; gap:10px; padding:10px; border:1px solid #e4e4df; border-radius:8px; background:#fff; }
 .connections-icon { display:grid; place-items:center; flex:none; width:28px; height:28px; border-radius:7px; background:#f3ecdf; color:#743f32; }
+.connections-brand-icon { padding:5px; background:#fff; border:1px solid #ebe9e4; }
+.connections-brand-icon img { display:block; width:100%; height:100%; object-fit:contain; }
 .connections-name { display:flex; flex-direction:column; gap:2px; min-width:0; flex:1; }
 .connections-name strong { font-size:12px; font-weight:600; overflow-wrap:anywhere; }
 .connections-name small { font-size:10px; color:#888; overflow-wrap:anywhere; }

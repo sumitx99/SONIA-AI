@@ -3,6 +3,7 @@
 import asyncio
 import json
 from contextlib import asynccontextmanager
+from urllib.parse import urljoin, urlsplit
 
 import httpx2
 from mcp.client.session import ClientSession
@@ -66,10 +67,26 @@ def describe_tool(tool: types.Tool) -> dict:
     }
 
 
-async def fetch_tools(connection: dict, auth: httpx2.Auth | None = None) -> list[dict]:
+def server_icon_url(server_info: types.Implementation | None, endpoint: str) -> str | None:
+    """Return the server-advertised icon, if it is safe to hand to the browser.
+
+    ``serverInfo.icons`` is MCP metadata, so this works for every compliant server instead
+    of keeping a growing list of provider names in the UI. Relative icon URLs are resolved
+    against the MCP endpoint; insecure and non-web schemes are intentionally ignored.
+    """
+    for icon in (getattr(server_info, "icons", None) or []):
+        url = urljoin(endpoint, icon.src)
+        if urlsplit(url).scheme == "https":
+            return url
+    return None
+
+
+async def fetch_tools(connection: dict, auth: httpx2.Auth | None = None, *, include_server_info=False):
     async with open_session(connection, auth) as session:
         listed = await asyncio.wait_for(session.list_tools(), CONNECT_TIMEOUT)
-    return [describe_tool(tool) for tool in listed.tools[:MAX_TOOLS]]
+        icon_url = server_icon_url(session.server_info, connection["url"])
+    tools = [describe_tool(tool) for tool in listed.tools[:MAX_TOOLS]]
+    return (tools, icon_url) if include_server_info else tools
 
 
 def result_text(result) -> tuple[str, bool]:

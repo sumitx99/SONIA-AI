@@ -440,6 +440,7 @@ export interface McpConnection {
   id: string;
   name: string;
   url: string;
+  icon_url: string | null;
   auth_type: "none" | "header" | "oauth";
   enabled: boolean;
   last_error: string | null;

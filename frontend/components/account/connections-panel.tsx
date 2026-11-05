@@ -11,6 +11,27 @@ import {
 
 const MCP_URL = `${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").trim().replace(/\/+$/, "")}/mcp`;
 
+function endpointFavicon(url: string): string | null {
+  try {
+    return new URL("/favicon.ico", url).href;
+  } catch {
+    // The server URL is validated by the backend; retain the generic icon until then.
+    return null;
+  }
+}
+
+function ConnectionIcon({ url, iconUrl }: { url: string; iconUrl: string | null }) {
+  const [failed, setFailed] = useState(false);
+  // Prefer the MCP server's advertised brand icon. Servers without one fall back to their
+  // standard /favicon.ico endpoint, so adding a new provider never requires a UI code change.
+  const logo = iconUrl || endpointFavicon(url);
+  return (
+    <span className={`connections-icon${logo && !failed ? " connections-brand-icon" : ""}`} aria-hidden>
+      {logo && !failed ? <img src={logo} alt="" referrerPolicy="no-referrer" onError={() => setFailed(true)} /> : <Server size={14} />}
+    </span>
+  );
+}
+
 /** Apps (Claude, Cursor, …) the user allowed to read Sonia over MCP, with a way to cut them off. */
 function AppsUsingSonia() {
   const [grants, setGrants] = useState<OAuthGrant[] | null>(null);
@@ -123,7 +144,7 @@ function ConnectionCard({ connection, onChange, onRemove }: {
   return (
     <li className="mcp-connection">
       <div className="mcp-connection-head">
-        <span className="connections-icon" aria-hidden><Server size={14} /></span>
+        <ConnectionIcon url={connection.url} iconUrl={connection.icon_url} />
         <span className="connections-name">
           <strong>{connection.name}</strong>
           <small>{connection.url}</small>

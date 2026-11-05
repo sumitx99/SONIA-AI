@@ -44,10 +44,10 @@ class OAuthStart(BaseModel):
     url: str = Field(min_length=8, max_length=2048)
 
 
-async def _tools_or_400(connection: dict, user_id: str | None = None) -> list[dict]:
+async def _tools_or_400(connection: dict, user_id: str | None = None) -> tuple[list[dict], str | None]:
     try:
         auth = oauth.provider_for(user_id, connection) if connection["auth_type"] == "oauth" else None
-        return await fetch_tools(connection, auth)
+        return await fetch_tools(connection, auth, include_server_info=True)
     except UnsafeURLError as error:
         raise HTTPException(status_code=400, detail=str(error))
     except Exception as error:
@@ -91,9 +91,9 @@ async def add_mcp_connection(payload: ConnectionInput, user_id: str = Depends(cu
         except store.SecretKeyMissing as error:
             raise HTTPException(status_code=503, detail=str(error))
     candidate = {"url": payload.url.strip(), "auth_type": payload.auth_type, "secret": secret}
-    tools = await _tools_or_400(candidate)
+    tools, icon_url = await _tools_or_400(candidate)
     return await store.create_connection(user_id, payload.name.strip(), candidate["url"],
-                                         payload.auth_type, secret, tools)
+                                         payload.auth_type, secret, tools, icon_url)
 
 
 @router.post("/oauth/start")
@@ -170,11 +170,11 @@ async def refresh_mcp_connection(connection_id: str, user_id: str = Depends(curr
     if not connection:
         raise HTTPException(status_code=404, detail="Connection not found")
     try:
-        tools = await _tools_or_400(connection, user_id)
+        tools, icon_url = await _tools_or_400(connection, user_id)
     except HTTPException as error:
         await store.update_connection(user_id, connection_id, last_error=error.detail)
         raise
-    return await store.update_connection(user_id, connection_id, tools=tools, last_error=None)
+    return await store.update_connection(user_id, connection_id, tools=tools, icon_url=icon_url, last_error=None)
 
 
 @router.patch("/{connection_id}")

@@ -54,6 +54,7 @@ async def ensure_connection_schema():
                 url TEXT NOT NULL,
                 auth_type TEXT NOT NULL CHECK (auth_type IN ('none', 'header', 'oauth')),
                 secret BYTEA,
+                icon_url TEXT,
                 tools JSONB NOT NULL DEFAULT '[]'::jsonb,
                 tool_policies JSONB NOT NULL DEFAULT '{}'::jsonb,
                 enabled BOOLEAN NOT NULL DEFAULT true,
@@ -62,6 +63,7 @@ async def ensure_connection_schema():
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
             );
             CREATE INDEX IF NOT EXISTS mcp_connections_user_idx ON mcp_connections(user_id);
+            ALTER TABLE mcp_connections ADD COLUMN IF NOT EXISTS icon_url TEXT;
             ALTER TABLE mcp_connections ENABLE ROW LEVEL SECURITY;
         """)
     _schema_ready = True
@@ -72,6 +74,7 @@ def _row(row, with_secret=False) -> dict:
     policies = json.loads(row["tool_policies"]) if isinstance(row["tool_policies"], str) else row["tool_policies"]
     connection = {
         "id": str(row["id"]), "name": row["name"], "url": row["url"], "auth_type": row["auth_type"],
+        "icon_url": row.get("icon_url"),
         "enabled": row["enabled"], "last_error": row["last_error"],
         "created_at": row["created_at"].isoformat(),
         "tools": [{**tool, "policy": policies.get(tool["name"], default_policy(tool))} for tool in tools],
@@ -86,7 +89,7 @@ def _row(row, with_secret=False) -> dict:
     return connection
 
 
-_COLUMNS = "id, name, url, auth_type, secret, tools, tool_policies, enabled, last_error, created_at"
+_COLUMNS = "id, name, url, auth_type, secret, icon_url, tools, tool_policies, enabled, last_error, created_at"
 
 
 async def list_connections(user_id: str, *, enabled_only=False, with_secret=False) -> list[dict]:
@@ -113,18 +116,18 @@ async def count_connections(user_id: str) -> int:
         return await conn.fetchval("SELECT count(*) FROM mcp_connections WHERE user_id = $1", user_id)
 
 
-async def create_connection(user_id, name, url, auth_type, secret, tools) -> dict:
+async def create_connection(user_id, name, url, auth_type, secret, tools, icon_url=None) -> dict:
     await ensure_connection_schema()
     async with (await get_pool()).acquire() as conn:
         row = await conn.fetchrow(
-            f"INSERT INTO mcp_connections (user_id, name, url, auth_type, secret, tools) "
-            f"VALUES ($1, $2, $3, $4, $5, $6::jsonb) RETURNING {_COLUMNS}",
-            user_id, name, url, auth_type, encrypt_secret(secret), json.dumps(tools))
+            f"INSERT INTO mcp_connections (user_id, name, url, auth_type, secret, tools, icon_url) "
+            f"VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7) RETURNING {_COLUMNS}",
+            user_id, name, url, auth_type, encrypt_secret(secret), json.dumps(tools), icon_url)
     return _row(row)
 
 
 async def update_connection(user_id, connection_id, *, name=None, enabled=None, tool_policies=None,
-                            tools=None, secret=None, last_error=...) -> dict | None:
+                            tools=None, secret=None, icon_url=..., last_error=...) -> dict | None:
     """Updates the given fields; `last_error` takes None to clear it."""
     await ensure_connection_schema()
     sets, values = [], [user_id, connection_id]
@@ -143,6 +146,8 @@ async def update_connection(user_id, connection_id, *, name=None, enabled=None, 
         assign("tools", json.dumps(tools), "::jsonb")
     if secret is not None:
         assign("secret", encrypt_secret(secret))
+    if icon_url is not ...:
+        assign("icon_url", icon_url)
     if last_error is not ...:
         assign("last_error", last_error)
     sets.append("updated_at = now()")

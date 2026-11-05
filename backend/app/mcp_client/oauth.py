@@ -152,14 +152,16 @@ async def start_flow(user_id: str, name: str, url: str, connection_id: str | Non
 
     async def complete():
         try:
-            tools = await fetch_tools({"url": url, "auth_type": "oauth"}, auth=provider)
+            tools, icon_url = await fetch_tools({"url": url, "auth_type": "oauth"}, auth=provider,
+                                                 include_server_info=True)
             if connection_id:
                 flow.connection = await store.update_connection(
-                    user_id, connection_id, secret=storage.secret, tools=tools, last_error=None)
+                    user_id, connection_id, secret=storage.secret, tools=tools, icon_url=icon_url, last_error=None)
                 if flow.connection is None:
                     raise RuntimeError("The connection was removed while signing in")
             else:
-                flow.connection = await store.create_connection(user_id, name, url, "oauth", storage.secret, tools)
+                flow.connection = await store.create_connection(user_id, name, url, "oauth", storage.secret, tools,
+                                                                icon_url)
             flow.status = "done"
         except Exception as error:
             logger.info("MCP OAuth flow for %s failed: %r", url, error)
