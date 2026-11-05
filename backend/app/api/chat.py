@@ -41,11 +41,11 @@ async def chat(query: str = Form(...), document_ids: list[int] | None = Form(Non
         return {"query": query, "answer": answer or NO_ANSWER, "citations": citations, "web_images": web_images, **meta}
 
     except HTTPError as e:
-        logger.error(f"HTTPError during LLM call: {e}")
-        raise HTTPException(status_code=503, detail=f"The AI service is temporarily unavailable: {e.response.text}")
-    except Exception as e:
-        logger.error(f"An unexpected error occurred during chat: {e}")
-        raise HTTPException(status_code=500, detail=f"An internal server error occurred: {str(e)}")
+        logger.exception("The AI service failed during chat")
+        raise HTTPException(status_code=503, detail=_failure_message(e))
+    except Exception:
+        logger.exception("An unexpected error occurred during chat")
+        raise HTTPException(status_code=500, detail="Something went wrong on our side. Please try again.")
 
 
 def _failure_message(error: Exception) -> str:
@@ -79,11 +79,12 @@ async def chat_stream(query: str = Form(...), document_ids: list[int] | None = F
         # Retrieval errors happen before any bytes are sent, so they keep normal status codes.
         context, meta = await answer_context(query, document_ids, scope_documents, include_images, user_id)
     except HTTPError as e:
-        logger.error(f"HTTPError during retrieval: {e}")
-        raise HTTPException(status_code=503, detail=f"The AI service is temporarily unavailable: {e.response.text}")
-    except Exception as e:
-        logger.error(f"An unexpected error occurred during chat: {e}")
-        raise HTTPException(status_code=500, detail=f"An internal server error occurred: {str(e)}")
+        # Provider error bodies stay in the logs; users get a plain explanation.
+        logger.exception("Retrieval failed")
+        raise HTTPException(status_code=503, detail=_failure_message(e))
+    except Exception:
+        logger.exception("An unexpected error occurred during retrieval")
+        raise HTTPException(status_code=500, detail="Something went wrong on our side. Please try again.")
 
     declarations, registry = await _load_tools(user_id)
 

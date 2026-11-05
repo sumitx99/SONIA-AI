@@ -5,7 +5,7 @@ import logging
 import os
 import json
 from functools import lru_cache
-from app.core.db import search_embeddings
+from app.core.db import search_chunks_by_text, search_embeddings
 
 logger = logging.getLogger(__name__)
 
@@ -37,15 +37,19 @@ def rank_contexts(query, results, text_key="chunk_text", limit=5):
                                            key=lambda item: item[0], reverse=True)[:limit]]
 
 
-async def get_reranked_context(query: str, query_embedding: list, document_ids=None) -> str:
+async def get_reranked_context(query: str, query_embedding: list | None, document_ids=None) -> str:
     """
-    Performs a two-stage retrieval process for high-precision context.
+    Performs a two-stage retrieval process for high-precision context. Without an embedding
+    (the embedding service is unavailable) the first stage searches by keyword instead.
     """
     # --- STAGE 1: Initial Retrieval (Broad Net) ---
     CANDIDATE_COUNT = 25
     logger.info(f"Retrieving top {CANDIDATE_COUNT} candidates from the database...")
-    initial_results = await search_embeddings(query_embedding, top_k=CANDIDATE_COUNT,
-                                              document_ids=document_ids)
+    if query_embedding is None:
+        initial_results = await search_chunks_by_text(query, top_k=CANDIDATE_COUNT, document_ids=document_ids)
+    else:
+        initial_results = await search_embeddings(query_embedding, top_k=CANDIDATE_COUNT,
+                                                  document_ids=document_ids)
 
     if not initial_results:
         logger.warning("Initial retrieval from DB returned no results.")

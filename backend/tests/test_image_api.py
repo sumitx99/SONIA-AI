@@ -201,6 +201,27 @@ class ImageAPITests(unittest.TestCase):
         main.app.dependency_overrides.clear()
         self.assertEqual(self.client.post("/chat/stream", data={"query": "hi"}).status_code, 401)
 
+    def test_documents_are_searched_by_keyword_when_gemini_cannot_embed(self):
+        spend_cap = requests.HTTPError(response=Mock(status_code=429))
+        with patch.object(context, "get_embedding", side_effect=spend_cap), \
+             patch.object(context, "get_reranked_context", return_value="Document text") as text_search, \
+             patch.object(agent, "stream_gemini_parts", return_value=iter([{"text": "Answer."}])), \
+             self.assertLogs("app.services.context", level="WARNING"):
+            response = self.client.post("/chat/stream", data={"query": "Summarize the policy"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(text_search.call_args.args[1])
+        self.assertIn("event: done", response.text)
+
+    def test_provider_error_details_never_reach_the_user(self):
+        secret_body = '{"error": {"message": "Your project has exceeded its monthly spending cap"}}'
+        failure = requests.HTTPError(response=Mock(status_code=400, text=secret_body))
+        with patch.object(context, "get_embedding", side_effect=failure), \
+             self.assertLogs("app.api.chat", level="ERROR"):
+            response = self.client.post("/chat/stream", data={"query": "Summarize"})
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("spending cap", response.text)
+        self.assertEqual(response.json()["detail"], "The answer was interrupted. Please try again.")
+
     def test_requests_without_a_token_are_rejected(self):
         main.app.dependency_overrides.clear()
         self.assertEqual(self.client.post("/chat", data={"query": "hi"}).status_code, 401)

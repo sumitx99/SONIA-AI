@@ -9,6 +9,7 @@ from app.services.images.document_images import requested_image_location, wants_
 from app.services.images.image_db import find_document_images
 from app.services.images.image_pipeline import image_attachments
 from app.services.images.image_storage import R2ImageStorage
+from app.services.llm import gemini_unavailable
 from app.services.retriever import get_reranked_context, rank_contexts
 
 logger = logging.getLogger(__name__)
@@ -20,7 +21,14 @@ async def answer_context(query, document_ids, scope_documents, include_images, u
     Image URLs come from retrieved metadata; the language model never invents them.
     Returns the prompt context and the image fields of the response.
     """
-    query_embedding = await asyncio.to_thread(get_embedding, query)
+    try:
+        query_embedding = await asyncio.to_thread(get_embedding, query)
+    except Exception as error:
+        if not gemini_unavailable(error):
+            raise
+        # Searching by meaning needs Gemini; keyword search keeps the documents usable meanwhile.
+        logger.warning("Embedding service unavailable (%s); searching documents by keyword", error)
+        query_embedding = None
     logger.info("Starting advanced retrieval with re-ranking...")
     requested = (document_ids or []) if scope_documents else document_ids
     # Only the signed-in user's documents are ever searched (None = all of theirs).

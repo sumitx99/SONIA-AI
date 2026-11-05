@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import ssl
 
 import asyncpg
@@ -156,6 +157,25 @@ async def search_embeddings(query_embedding, top_k=3, document_ids=None):
         rows = await conn.fetch(
             f"SELECT c.id AS chunk_id, c.document_id, d.filename, c.chunk_text FROM document_chunks c "
             f"JOIN documents d ON d.id = c.document_id{where} ORDER BY c.embedding <-> $1 LIMIT $2", *values)
+    return [dict(row) for row in rows]
+
+
+async def search_chunks_by_text(query, top_k=25, document_ids=None):
+    """Keyword search over passages, for when the question can't be embedded (embedding service
+    unavailable): any of the question's words, best matches first."""
+    words = re.findall(r"\w+", query.lower())[:20]
+    if document_ids == [] or not words:
+        return []
+    where, values = "", [" or ".join(words), top_k]
+    if document_ids is not None:
+        where = " AND c.document_id = ANY($3::int[])"
+        values.append(list(document_ids))
+    async with (await get_pool()).acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT c.id AS chunk_id, c.document_id, d.filename, c.chunk_text FROM document_chunks c "
+            "JOIN documents d ON d.id = c.document_id, websearch_to_tsquery('simple', $1) AS q "
+            f"WHERE to_tsvector('simple', c.chunk_text) @@ q{where} "
+            "ORDER BY ts_rank(to_tsvector('simple', c.chunk_text), q) DESC LIMIT $2", *values)
     return [dict(row) for row in rows]
 
 
