@@ -135,8 +135,15 @@
 .mcp-add-form label { display:flex; flex-direction:column; gap:5px; font-size:11px; color:#666; }
 .mcp-add-form input:not([type=checkbox]) { padding:8px 10px; border:1px solid #d8d8d4; border-radius:6px; background:#fff; font-size:12px; color:#222; }
 .mcp-add-form .mcp-check { flex-direction:row; align-items:center; gap:8px; }
-.mcp-header-fields { display:grid; grid-template-columns:minmax(0, 1fr) minmax(0, 2fr); gap:8px; }
-@media (max-width:520px) { .mcp-header-fields { grid-template-columns:1fr; } }
+.mcp-header-fields { display:flex; flex-direction:column; gap:8px; }
+.mcp-header-row { display:grid; grid-template-columns:minmax(150px, .8fr) minmax(0, 1.6fr) auto; align-items:end; gap:10px; padding:10px; border:1px solid #e1e1dc; border-radius:7px; background:#fff; }
+.mcp-header-row label { min-width:0; }
+.mcp-header-row .account-secondary-button { white-space:nowrap; }
+.mcp-header-fields > .account-secondary-button { align-self:flex-start; }
+@media (max-width:640px) {
+  .mcp-header-row { grid-template-columns:minmax(0, 1fr) auto; }
+  .mcp-header-row label:nth-child(2) { grid-column:1 / -1; }
+}
 .mcp-auth-choice { display:flex; flex-direction:column; gap:6px; margin:0; padding:0; border:0; }
 .mcp-auth-choice legend { margin-bottom:4px; font-size:11px; color:#666; }
 

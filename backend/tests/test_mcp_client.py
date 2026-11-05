@@ -76,6 +76,14 @@ class SecretStorageTests(unittest.TestCase):
         self.assertEqual(store.default_policy({"read_only": True}), "allow")
         self.assertEqual(store.default_policy({"read_only": False}), "ask")
 
+    def test_multiple_headers_are_sent_and_old_single_header_connections_still_work(self):
+        multiple = {"auth_type": "header", "secret": {"headers": {
+            "x-api-host": "linkedin-api8.p.rapidapi.com", "x-api-key": "secret"}}}
+        legacy = {"auth_type": "header", "secret": {"header_name": "Authorization", "header_value": "Bearer x"}}
+        self.assertEqual(session_module._headers(multiple), {
+            "x-api-host": "linkedin-api8.p.rapidapi.com", "x-api-key": "secret"})
+        self.assertEqual(session_module._headers(legacy), {"Authorization": "Bearer x"})
+
 
 CONNECTION = {"id": "conn-1", "name": "Notes", "url": "https://notes.example.com/mcp", "auth_type": "none",
               "secret": None}

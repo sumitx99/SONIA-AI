@@ -21,8 +21,14 @@ CLIENT_INFO = types.Implementation(name="Sonia", version="1.0")
 
 def _headers(connection: dict) -> dict:
     secret = connection.get("secret") or {}
-    if connection["auth_type"] == "header" and secret.get("header_value"):
-        return {secret.get("header_name") or "Authorization": secret["header_value"]}
+    if connection["auth_type"] == "header":
+        # New connections can carry credentials required by gateway MCP servers,
+        # such as RapidAPI's host and API-key headers. Read old single-header
+        # secrets too so existing connections keep working.
+        if secret.get("headers"):
+            return dict(secret["headers"])
+        if secret.get("header_value"):
+            return {secret.get("header_name") or "Authorization": secret["header_value"]}
     return {}
 
 

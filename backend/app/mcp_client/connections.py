@@ -22,8 +22,15 @@ class ConnectionInput(BaseModel):
     name: str = Field(min_length=1, max_length=60)
     url: str = Field(min_length=8, max_length=2048)
     auth_type: Literal["none", "header"] = "none"
+    headers: list["ConnectionHeader"] = Field(default_factory=list, max_length=10)
+    # Kept for clients saved before multiple headers were supported.
     header_name: str = Field("Authorization", max_length=100, pattern=r"^[A-Za-z0-9-]+$")
     header_value: str = Field("", max_length=4096)
+
+
+class ConnectionHeader(BaseModel):
+    name: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9-]+$")
+    value: str = Field(min_length=1, max_length=4096)
 
 
 class ConnectionUpdate(BaseModel):
@@ -65,10 +72,19 @@ async def list_mcp_connections(user_id: str = Depends(current_user)):
 async def add_mcp_connection(payload: ConnectionInput, user_id: str = Depends(current_user)):
     if await store.count_connections(user_id) >= store.MAX_CONNECTIONS:
         raise HTTPException(status_code=400, detail=f"You can add up to {store.MAX_CONNECTIONS} connections.")
-    if payload.auth_type == "header" and not payload.header_value.strip():
-        raise HTTPException(status_code=422, detail="Enter the header value (for example your API key).")
-    secret = ({"header_name": payload.header_name, "header_value": payload.header_value.strip()}
-              if payload.auth_type == "header" else None)
+    secret = None
+    if payload.auth_type == "header":
+        raw_headers = payload.headers or [ConnectionHeader(name=payload.header_name, value=payload.header_value)]
+        headers: dict[str, str] = {}
+        for header in raw_headers:
+            name, value = header.name.strip(), header.value.strip()
+            if not value:
+                raise HTTPException(status_code=422, detail="Enter a value for every header.")
+            normalized = name.lower()
+            if normalized in {key.lower() for key in headers}:
+                raise HTTPException(status_code=422, detail=f"Header {name} was entered more than once.")
+            headers[name] = value
+        secret = {"headers": headers}
     if secret:
         try:
             store.encrypt_secret(secret)

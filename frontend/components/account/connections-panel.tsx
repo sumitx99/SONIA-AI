@@ -189,8 +189,7 @@ function AddConnectionForm({ onAdded }: { onAdded: (connection: McpConnection) =
   const [url, setUrl] = useState("");
   const [auth, setAuth] = useState<"none" | "header" | "oauth">("none");
   const useHeader = auth === "header";
-  const [headerName, setHeaderName] = useState("Authorization");
-  const [headerValue, setHeaderValue] = useState("");
+  const [headers, setHeaders] = useState([{ name: "Authorization", value: "" }]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -228,10 +227,10 @@ function AddConnectionForm({ onAdded }: { onAdded: (connection: McpConnection) =
     try {
       onAdded(await addMcpConnection({
         name: name.trim(), url: url.trim(), auth_type: useHeader ? "header" : "none",
-        ...(useHeader && { header_name: headerName.trim(), header_value: headerValue }),
+        ...(useHeader && { headers: headers.map((header) => ({ name: header.name.trim(), value: header.value })) }),
       }));
       setOpen(false);
-      setName(""); setUrl(""); setHeaderValue(""); setAuth("none");
+      setName(""); setUrl(""); setHeaders([{ name: "Authorization", value: "" }]); setAuth("none");
     } catch (failure) {
       setError(handleApiError(failure));
     } finally {
@@ -267,13 +266,23 @@ function AddConnectionForm({ onAdded }: { onAdded: (connection: McpConnection) =
       </fieldset>
       {useHeader && (
         <div className="mcp-header-fields">
-          <label><span>Header</span>
-            <input value={headerName} onChange={(event) => setHeaderName(event.target.value)} required pattern="[A-Za-z0-9-]+" />
-          </label>
-          <label><span>Value</span>
-            <input value={headerValue} onChange={(event) => setHeaderValue(event.target.value)} required type="password"
-              autoComplete="off" placeholder="Bearer …" />
-          </label>
+          {headers.map((header, index) => (
+            <div className="mcp-header-row" key={index}>
+              <label><span>Header</span>
+                <input value={header.name} onChange={(event) => setHeaders((current) => current.map((item, itemIndex) =>
+                  itemIndex === index ? { ...item, name: event.target.value } : item))} required pattern="[A-Za-z0-9-]+" />
+              </label>
+              <label><span>Value</span>
+                <input value={header.value} onChange={(event) => setHeaders((current) => current.map((item, itemIndex) =>
+                  itemIndex === index ? { ...item, value: event.target.value } : item))} required type="password"
+                  autoComplete="off" placeholder="Header value" />
+              </label>
+              {headers.length > 1 && <button type="button" className="account-secondary-button"
+                onClick={() => setHeaders((current) => current.filter((_, itemIndex) => itemIndex !== index))}>Remove</button>}
+            </div>
+          ))}
+          {headers.length < 10 && <button type="button" className="account-secondary-button"
+            onClick={() => setHeaders((current) => [...current, { name: "", value: "" }])}>Add header</button>}
         </div>
       )}
       <p className="connections-empty">Sonia connects now to check the server and list its tools. Keys are stored encrypted.</p>

@@ -462,7 +462,7 @@ export const listMcpConnections = async () =>
   (await connectionsRequest<{ connections: McpConnection[] }>("")).connections;
 
 export const addMcpConnection = (input: { name: string; url: string; auth_type: "none" | "header";
-  header_name?: string; header_value?: string }) =>
+  headers?: { name: string; value: string }[] }) =>
   connectionsRequest<McpConnection>("", { method: "POST", body: JSON.stringify(input) });
 
 export const refreshMcpConnection = (id: string) =>
