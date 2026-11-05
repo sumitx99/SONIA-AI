@@ -109,6 +109,7 @@ class Flow:
     user_id: str
     name: str
     url: str
+    connection_id: str | None = None
     started: float = field(default_factory=time.monotonic)
     callback: asyncio.Future = field(default_factory=lambda: asyncio.get_running_loop().create_future())
     task: asyncio.Task | None = None
@@ -126,12 +127,16 @@ def _expire_old_flows():
             _flows.pop(state, None)
 
 
-async def start_flow(user_id: str, name: str, url: str) -> tuple[str, str]:
-    """Begins sign-in to an MCP server; returns (flow id, authorization URL to open)."""
+async def start_flow(user_id: str, name: str, url: str, connection_id: str | None = None) -> tuple[str, str]:
+    """Begins sign-in to an MCP server; returns (flow id, authorization URL to open).
+
+    ``connection_id`` replaces the credentials on an existing OAuth connection after
+    reauthorization instead of creating a duplicate connection.
+    """
     _expire_old_flows()
     storage = SecretStorage()
     authorization_url: asyncio.Future = asyncio.get_running_loop().create_future()
-    flow = Flow(user_id, name, url)
+    flow = Flow(user_id, name, url, connection_id)
 
     async def redirect(auth_url: str) -> None:
         state = (parse_qs(urlsplit(auth_url).query).get("state") or [""])[0]
@@ -148,7 +153,13 @@ async def start_flow(user_id: str, name: str, url: str) -> tuple[str, str]:
     async def complete():
         try:
             tools = await fetch_tools({"url": url, "auth_type": "oauth"}, auth=provider)
-            flow.connection = await store.create_connection(user_id, name, url, "oauth", storage.secret, tools)
+            if connection_id:
+                flow.connection = await store.update_connection(
+                    user_id, connection_id, secret=storage.secret, tools=tools, last_error=None)
+                if flow.connection is None:
+                    raise RuntimeError("The connection was removed while signing in")
+            else:
+                flow.connection = await store.create_connection(user_id, name, url, "oauth", storage.secret, tools)
             flow.status = "done"
         except Exception as error:
             logger.info("MCP OAuth flow for %s failed: %r", url, error)

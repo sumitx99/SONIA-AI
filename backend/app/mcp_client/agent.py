@@ -104,7 +104,16 @@ async def _run_tool(user_id: str, connection: dict, tool: dict, arguments: dict)
     try:
         auth = provider_for(user_id, connection) if connection["auth_type"] == "oauth" else None
         async with open_session(connection, auth) as session:
-            return await call_tool(session, tool["name"], arguments)
+            result = await call_tool(session, tool["name"], arguments)
+        # A refreshed OAuth token can make an earlier failure obsolete. Avoid leaving
+        # the Settings page stuck showing a warning once the server is usable again.
+        if connection.get("last_error"):
+            connection["last_error"] = None
+            try:
+                await store.update_connection(user_id, connection["id"], last_error=None)
+            except Exception:
+                logger.info("Could not clear the connection error after a successful tool call")
+        return result
     except Exception as error:
         if needs_reauthorization(error):
             message = "Sign in to this server again from Settings → Connections. The OAuth session needs reauthorization; no action was executed. Do not retry until reconnected."

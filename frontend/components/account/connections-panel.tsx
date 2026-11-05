@@ -6,7 +6,7 @@ import type { OAuthGrant } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import {
   addMcpConnection, deleteMcpConnection, handleApiError, listMcpConnections, mcpOAuthStatus,
-  refreshMcpConnection, startMcpOAuth, updateMcpConnection, type McpConnection, type ToolPolicy,
+  reconnectMcpOAuth, refreshMcpConnection, startMcpOAuth, updateMcpConnection, type McpConnection, type ToolPolicy,
 } from "@/lib/api";
 
 const MCP_URL = `${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").trim().replace(/\/+$/, "")}/mcp`;
@@ -93,6 +93,33 @@ function ConnectionCard({ connection, onChange, onRemove }: {
     }
   }
 
+  async function reconnect() {
+    // Open before the request so browsers retain the user-gesture permission for the popup.
+    const popup = window.open("about:blank", "sonia-mcp-signin", "width=520,height=720");
+    setBusy("reconnect");
+    setError("");
+    try {
+      const { flow_id, authorization_url } = await reconnectMcpOAuth(connection.id);
+      if (popup) popup.location.href = authorization_url; else window.open(authorization_url, "_blank");
+      const deadline = Date.now() + 10 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        const status = await mcpOAuthStatus(flow_id);
+        if (status.status === "done" && status.connection) {
+          onChange(status.connection);
+          return;
+        }
+        if (status.status === "error") throw new Error(status.error || "Signing in didn’t complete");
+      }
+      throw new Error("Signing in took too long. Please try again.");
+    } catch (failure) {
+      popup?.close();
+      setError(handleApiError(failure));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   return (
     <li className="mcp-connection">
       <div className="mcp-connection-head">
@@ -137,6 +164,12 @@ function ConnectionCard({ connection, onChange, onRemove }: {
         </ul>
       )}
       <div className="mcp-connection-actions">
+        {connection.auth_type === "oauth" && (
+          <button type="button" className="account-secondary-button" disabled={busy !== null} onClick={() => void reconnect()}>
+            {busy === "reconnect" ? <Loader2 size={13} className="animate-spin" /> : <Plug size={13} />}
+            Reconnect
+          </button>
+        )}
         <button type="button" className="account-secondary-button" disabled={busy !== null}
           onClick={() => run("refresh", () => refreshMcpConnection(connection.id))}>
           {busy === "refresh" ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Refresh tools

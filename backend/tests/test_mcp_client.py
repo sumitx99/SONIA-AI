@@ -258,6 +258,32 @@ class ConnectionsAPITests(unittest.TestCase):
 
 
 class OAuthFlowTests(unittest.TestCase):
+    def test_reconnect_starts_a_flow_for_the_existing_oauth_connection(self):
+        connection = {**CONNECTION, "auth_type": "oauth"}
+        backend.app.dependency_overrides[current_user] = lambda: "user-1"
+        self.addCleanup(backend.app.dependency_overrides.clear)
+        with patch.object(store, "get_connection", AsyncMock(return_value=connection)), \
+             patch.object(store, "encrypt_secret"), \
+             patch.object(oauth, "start_flow", AsyncMock(return_value=("flow-1", "https://login.example.com"))) as start:
+            response = TestClient(backend.app).post("/mcp-connections/conn-1/oauth/reconnect")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"flow_id": "flow-1", "authorization_url": "https://login.example.com"})
+        start.assert_awaited_once_with("user-1", "Notes", "https://notes.example.com/mcp", connection_id="conn-1")
+
+    def test_successful_tool_call_clears_an_old_connection_error(self):
+        connection = {**CONNECTION, "last_error": "Sign in again"}
+        session = Mock()
+        session_context = Mock()
+        session_context.__aenter__ = AsyncMock(return_value=session)
+        session_context.__aexit__ = AsyncMock(return_value=None)
+        with patch.object(agent, "open_session", return_value=session_context), \
+             patch.object(agent, "call_tool", AsyncMock(return_value=("ok", False))), \
+             patch.object(store, "update_connection", AsyncMock()) as update:
+            result = asyncio.run(agent._run_tool("user-1", connection, {"name": "read"}, {}))
+        self.assertEqual(result, ("ok", False))
+        self.assertIsNone(connection["last_error"])
+        update.assert_awaited_once_with("user-1", "conn-1", last_error=None)
+
     def test_nested_reauthorization_reaches_tool_status_and_is_not_retried(self):
         error = ExceptionGroup("transport", [ExceptionGroup("session", [oauth.ReauthorizationRequired("Sign in again")])])
         connection = {**CONNECTION, "auth_type": "oauth"}

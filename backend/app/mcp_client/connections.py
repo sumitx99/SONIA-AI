@@ -127,6 +127,27 @@ async def oauth_connection_callback(state: str = "", code: str | None = None, er
         f"<p>{message}</p><script>setTimeout(function(){{window.close()}},1500)</script>")
 
 
+@router.post("/{connection_id}/oauth/reconnect")
+async def reconnect_oauth_connection(connection_id: str, user_id: str = Depends(current_user)):
+    """Starts a new OAuth grant for an existing connection without creating a second one."""
+    connection = await store.get_connection(user_id, connection_id)
+    if not connection:
+        raise HTTPException(status_code=404, detail="Connection not found")
+    if connection["auth_type"] != "oauth":
+        raise HTTPException(status_code=422, detail="Only OAuth connections can be reconnected.")
+    try:
+        # Confirm that the replacement credentials can be persisted before opening a browser.
+        store.encrypt_secret({"check": True})
+        flow_id, authorization_url = await oauth.start_flow(
+            user_id, connection["name"], connection["url"], connection_id=connection_id)
+    except store.SecretKeyMissing as error:
+        raise HTTPException(status_code=503, detail=str(error))
+    except Exception as error:
+        logger.info("Couldn't restart OAuth for %s: %r", connection["url"], error)
+        raise HTTPException(status_code=400, detail="Couldn't start sign-in for that server. Please try again.")
+    return {"flow_id": flow_id, "authorization_url": authorization_url}
+
+
 @router.post("/{connection_id}/refresh")
 async def refresh_mcp_connection(connection_id: str, user_id: str = Depends(current_user)):
     connection = await store.get_connection(user_id, connection_id, with_secret=True)

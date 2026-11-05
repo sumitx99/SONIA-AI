@@ -468,6 +468,9 @@ export const addMcpConnection = (input: { name: string; url: string; auth_type: 
 export const refreshMcpConnection = (id: string) =>
   connectionsRequest<McpConnection>(`/${id}/refresh`, { method: "POST" });
 
+export const reconnectMcpOAuth = (id: string) =>
+  connectionsRequest<{ flow_id: string; authorization_url: string }>(`/${id}/oauth/reconnect`, { method: "POST" });
+
 export const updateMcpConnection = (id: string, changes: { name?: string; enabled?: boolean;
   tool_policies?: Record<string, ToolPolicy> }) =>
   connectionsRequest<McpConnection>(`/${id}`, { method: "PATCH", body: JSON.stringify(changes) });
