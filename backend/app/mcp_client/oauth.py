@@ -40,6 +40,12 @@ class ReauthorizationRequired(RuntimeError):
     """The connection's tokens can't be refreshed; the user has to sign in again."""
 
 
+def needs_reauthorization(error: BaseException) -> bool:
+    """AnyIO wraps authentication failures in task groups; retain their actionable reason."""
+    return isinstance(error, ReauthorizationRequired) or (
+        isinstance(error, BaseExceptionGroup) and any(needs_reauthorization(child) for child in error.exceptions))
+
+
 def _public_api_url() -> str:
     return os.getenv("PUBLIC_API_URL", "http://localhost:8000").strip().rstrip("/")
 

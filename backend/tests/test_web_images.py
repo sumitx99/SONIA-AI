@@ -11,6 +11,7 @@ from PIL import Image
 from app.services.images import web_images as images
 from app.api import web_images as image_api, conversations
 from app.mcp_client import agent
+from app.services import source_reader
 from test_image_pipeline import FakePool
 
 
@@ -30,6 +31,21 @@ def png():
 
 
 class WebImagesTests(unittest.TestCase):
+    def test_download_rejects_private_dns_and_oversized_responses(self):
+        with patch.object(source_reader.socket, "getaddrinfo", return_value=[(2, 1, 6, "", ("169.254.169.254", 443))]):
+            with self.assertRaises(ValueError): source_reader.public_addresses("images.example")
+        response = Mock(status=200, headers={"Content-Type": "image/png"})
+        response.read.return_value = b"12345"
+        pool = Mock()
+        pool.__enter__ = Mock(return_value=pool)
+        pool.__exit__ = Mock(return_value=False)
+        pool.urlopen.return_value = response
+        with patch.object(source_reader, "public_addresses", return_value=["93.184.216.34"]), \
+             patch.object(source_reader.urllib3, "HTTPSConnectionPool", return_value=pool):
+            with self.assertRaises(ValueError):
+                source_reader.read_public_resource("https://images.example/a.png", 4, ("image/png",))
+        response.close.assert_called_once()
+
     def test_search_filters_missing_or_ineligible_licenses_and_html(self):
         info = {"thumburl": CANDIDATE["download_url"], "descriptionurl": CANDIDATE["source_url"],
                 "extmetadata": {"License": {"value": "cc-by-sa-4.0"}, "LicenseUrl": {"value": CANDIDATE["license_url"]},
@@ -130,13 +146,14 @@ class WebImagesTests(unittest.TestCase):
         owned.assert_awaited_once_with("user-1", [IMAGE_ID])
 
     def test_model_selected_tool_has_progress_and_real_attachments(self):
-        rounds = iter([[{"functionCall": {"id": "i1", "name": "search_web_images", "args": {"query": "bridge", "limit": 1}}}], [{"text": "The image is shown below."}]])
+        rounds = iter([[{"functionCall": {"id": "i1", "name": "search_web_images", "args": {"query": "bridge"}}}], [{"text": "The image is shown below."}]])
         async def collect(): return [event async for event in agent.answer_with_tools("user-1", "Show me a bridge photo", "", [], {})]
         with patch.object(agent, "image_search_configured", return_value=True), \
              patch.object(agent, "stream_gemini_parts", side_effect=lambda *a: iter(next(rounds))), \
              patch.object(agent, "search_and_store", AsyncMock(return_value=[{**ROW["metadata"], "image_id": IMAGE_ID,
-                        "url": "secret-signed-url", "url_expires_in": 900}])):
+                        "url": "secret-signed-url", "url_expires_in": 900}])) as search:
             events = asyncio.run(collect())
+        search.assert_awaited_once_with("user-1", "bridge", 1)
         statuses = [data["status"] for kind, data in events if kind == "tool_call"]
         self.assertEqual(statuses, ["running", "done"])
         self.assertTrue(any(kind == "web_images" for kind, data in events))

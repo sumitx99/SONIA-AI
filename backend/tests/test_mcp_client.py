@@ -258,6 +258,21 @@ class ConnectionsAPITests(unittest.TestCase):
 
 
 class OAuthFlowTests(unittest.TestCase):
+    def test_nested_reauthorization_reaches_tool_status_and_is_not_retried(self):
+        error = ExceptionGroup("transport", [ExceptionGroup("session", [oauth.ReauthorizationRequired("Sign in again")])])
+        connection = {**CONNECTION, "auth_type": "oauth"}
+        self.assertTrue(oauth.needs_reauthorization(error))
+        with patch.object(agent, "provider_for", return_value=Mock()), \
+             patch.object(agent, "open_session", side_effect=error) as connect, \
+             patch.object(store, "update_connection", AsyncMock()) as update:
+            first = asyncio.run(agent._run_tool("user-1", connection, {"name": "discover"}, {}))
+            second = asyncio.run(agent._run_tool("user-1", connection, {"name": "inspect"}, {}))
+        self.assertTrue(first[1])
+        self.assertIn("reauthorization", first[0])
+        self.assertEqual(first, second)
+        self.assertEqual(connect.call_count, 1)
+        update.assert_awaited_once()
+
     def test_unknown_state_is_ignored_and_callback_page_is_escaped(self):
         client = TestClient(backend.app)
         page = client.get("/mcp-connections/oauth/callback", params={"state": "nope", "code": "c"})

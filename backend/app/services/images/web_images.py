@@ -33,7 +33,8 @@ IMAGE_SEARCH_TOOL = {
         "Never invent an image or claim the pixels were analyzed. No suitable result is a valid outcome.",
     "parametersJsonSchema": {"type": "object", "required": ["query"], "properties": {
         "query": {"type": "string", "description": "Concise public image search terms (prefer English).", "maxLength": 250},
-        "limit": {"type": "integer", "minimum": 1, "maximum": MAX_IMAGES}}},
+        "limit": {"type": "integer", "minimum": 1, "maximum": MAX_IMAGES,
+                  "description": "Number requested by the user; default to one preview."}}},
 }
 
 
@@ -172,7 +173,7 @@ async def store_candidate(user_id, candidate, storage):
     return attachment(row, storage)
 
 
-async def search_and_store(user_id, query, limit=2):
+async def search_and_store(user_id, query, limit=1):
     if not ID_PATTERN.fullmatch(user_id or ""):
         raise ValueError("Invalid account ID")
     if not isinstance(query, str) or not query.strip() or len(query) > 250:

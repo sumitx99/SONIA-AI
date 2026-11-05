@@ -44,6 +44,8 @@ async def _tools_or_400(connection: dict, user_id: str | None = None) -> list[di
     except UnsafeURLError as error:
         raise HTTPException(status_code=400, detail=str(error))
     except Exception as error:
+        if oauth.needs_reauthorization(error):
+            raise HTTPException(status_code=409, detail="Sign in to this server again from Settings → Connections. The OAuth session needs reauthorization.") from None
         logger.info("MCP server %s unreachable: %r", connection["url"], error)
         raise HTTPException(status_code=400, detail=(
             "Couldn't connect to that MCP server. Check the URL and credentials, and that it "

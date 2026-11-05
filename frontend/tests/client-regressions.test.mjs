@@ -156,6 +156,16 @@ test('web activity and sources reach the UI before answer text',async(t)=>{
 });
 
 const webActivity = loadTypeScript('../lib/web-activity.ts');
+test('web image attachments stream separately and keep image-search status', async(t)=>{
+ const image={image_id:'a'.repeat(64),title:'Bridge',source_url:'https://commons.wikimedia.org/wiki/File:Bridge.jpg',url:'https://r2.example/signed',license:'CC BY-SA 4.0'};
+ const events=[['web_images',{images:[image]}],['delta',{text:'Image found.'}],['done',{}]];
+ t.mock.method(globalThis,'fetch',async()=>new Response(events.map(([name,data])=>`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`).join(''),{headers:{'Content-Type':'text/event-stream'}}));
+ let received;
+ await client().streamMessage('Show a bridge photo',[],{onDelta:()=>{},onWebImages:images=>received=images});
+ assert.deepEqual(received,[image]);
+ const [card]=webActivity.publicToolCalls([{id:'images1',server:'Web',tool:'image_search',title:'Searching web images',status:'running'}]);
+ assert.equal(card.title,'Searching web images');
+});
 test('saved model-switch and quota diagnostics stay out of the account UI',()=>{
  const old=[{id:'web-backup',server:'Web',tool:'google_search',title:'Switching to Groq',status:'done',summary:'Gemini failed'}, {id:'web-search-unavailable',server:'Web',tool:'google_search',title:'Quota reached',status:'error'}];
  assert.deepEqual(webActivity.publicToolCalls(old,'hi'),[]);

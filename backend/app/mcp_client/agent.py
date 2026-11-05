@@ -24,7 +24,7 @@ from app.services.llm import (WEB_SEARCH_TOOL, conversation_turns, google_search
 from app.services.web_activity import WebActivity, safe_url
 from app.services.images.web_images import IMAGE_SEARCH_TOOL, configured as image_search_configured, search_and_store
 from app.mcp_client import store
-from app.mcp_client.oauth import provider_for
+from app.mcp_client.oauth import provider_for, needs_reauthorization
 from app.mcp_client.session import call_tool, open_session
 
 logger = logging.getLogger(__name__)
@@ -106,6 +106,14 @@ async def _run_tool(user_id: str, connection: dict, tool: dict, arguments: dict)
         async with open_session(connection, auth) as session:
             return await call_tool(session, tool["name"], arguments)
     except Exception as error:
+        if needs_reauthorization(error):
+            message = "Sign in to this server again from Settings → Connections. The OAuth session needs reauthorization; no action was executed. Do not retry until reconnected."
+            connection["unavailable_reason"] = message
+            try:
+                await store.update_connection(user_id, connection["id"], last_error=message)
+            except Exception:
+                logger.info("Could not save the connection's reauthorization status")
+            return message, True
         logger.info("Tool %s on %s failed: %r", tool["name"], connection["url"], error)
         return "The tool could not be reached or failed to run.", True
 
@@ -230,7 +238,7 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
                     if not any(tool["name"] == IMAGE_SEARCH_TOOL["name"] for tool in offered):
                         raise ValueError("Image search is unavailable for this turn")
                     image_searches += 1
-                    requested = arguments.get("limit", 2)
+                    requested = arguments.get("limit", 1)
                     if isinstance(requested, bool) or not isinstance(requested, int) or requested < 1:
                         raise ValueError("Choose a valid image count")
                     images = await search_and_store(user_id, arguments.get("query"), min(requested, 3 - image_count))
