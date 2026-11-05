@@ -389,15 +389,20 @@ def _select_backup_tools(question: str, tools: list) -> list:
     raise BackupUnavailable("The backup model could not select connected tools")
 
 
-def stream_tool_backup(contents: list, declarations: list, allow_web: bool = True):
+def stream_tool_backup(contents: list, declarations: list, allow_web: bool = True, app_tools=()):
     """Use the same client-executed tools on fallback; keep their approval policy in the agent.
 
     Native browser_search's non-streaming response cannot report live calls. Instead the
     model selects the existing web_search function, which the agent executes and reports.
+    `app_tools` names Sonia's own small tools that the agent already gated for this round
+    (e.g. reading a linked page). A large connected catalog is shortlisted, but these stay
+    on offer so the shortlist can never leave the model without them.
     """
     offered = list(declarations)
+    pinned = set(app_tools)
     if allow_web and web_search_available() and not any(item["name"] == WEB_SEARCH_TOOL["name"] for item in offered):
         offered.append(WEB_SEARCH_TOOL)
+        pinned.add(WEB_SEARCH_TOOL["name"])
     instruction = SYSTEM_INSTRUCTION + CHART_INSTRUCTION + CITATION_INSTRUCTION + TOOL_INSTRUCTION + WEB_INSTRUCTION.format(search=", and use web_search") + reply_language_policy(getattr(contents, "question", ""))
     messages = [{"role": "system", "content": instruction}]
     for turn in contents:
@@ -424,19 +429,23 @@ def stream_tool_backup(contents: list, declarations: list, allow_web: bool = Tru
             messages.append({"role": "user", "content": text})
     tools = [{"type": "function", "function": {"name": item["name"],
               "description": item.get("description", ""), "parameters": item.get("parametersJsonSchema", {})}} for item in offered]
+    # App tools come first, so trimming below drops connected tools before them.
+    app = [tool for tool in tools if tool["function"]["name"] in pinned]
+    connected = [tool for tool in tools if tool["function"]["name"] not in pinned]
     shortlist = getattr(contents, "backup_tool_names", None)
     if shortlist is not None:
         # Keep selection order and respect the tools still offered in this round.
-        by_name = {tool["function"]["name"]: tool for tool in tools}
-        tools = [by_name[name] for name in shortlist if name in by_name]
+        by_name = {tool["function"]["name"]: tool for tool in connected}
+        connected = [by_name[name] for name in shortlist if name in by_name]
+    tools = app + connected
 
     fitted, tools = _fit_groq_request(messages, tools)
-    if shortlist is None and tools and _estimated_tokens([fitted, tools]) > GROQ_REQUEST_TOKENS:
-        tools = _select_backup_tools(getattr(contents, "question", ""), tools)
-        shortlist = tuple(tool["function"]["name"] for tool in tools)
+    if shortlist is None and connected and _estimated_tokens([fitted, tools]) > GROQ_REQUEST_TOKENS:
+        connected = _select_backup_tools(getattr(contents, "question", ""), connected)
+        shortlist = tuple(tool["function"]["name"] for tool in connected)
         if isinstance(contents, ConversationTurns):
             contents.backup_tool_names = shortlist
-        fitted, tools = _fit_groq_request(messages, tools)
+        fitted, tools = _fit_groq_request(messages, app + connected)
 
     if shortlist is not None:
         while len(tools) > 1 and _estimated_tokens([fitted, tools]) > GROQ_REQUEST_TOKENS:

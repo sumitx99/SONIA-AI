@@ -149,8 +149,11 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
     backend = {"backup": False}
 
     def iterate_model_parts(offered):
+        # Sonia's own tools (not from a connection) stay on offer when the backup shortlists.
+        app_tools = [tool["name"] for tool in offered if tool not in declarations]
         if backend["backup"]:
-            yield from stream_tool_backup(contents, offered, allow_web=round_number < MAX_ROUNDS)
+            yield from stream_tool_backup(contents, offered, allow_web=round_number < MAX_ROUNDS,
+                                         app_tools=app_tools)
             return
         generated = False
         try:
@@ -167,7 +170,8 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
                 raise
             backend["backup"] = True
             # Keep the connected tools; their execution and approvals remain in this loop.
-            yield from stream_tool_backup(contents, offered, allow_web=round_number < MAX_ROUNDS)
+            yield from stream_tool_backup(contents, offered, allow_web=round_number < MAX_ROUNDS,
+                                         app_tools=app_tools)
     for round_number in range(MAX_ROUNDS + 1):
         # The last round offers no tools, so the model has to answer with what it has. While
         # Google Search is paused, web search runs through the web_search tool instead.
