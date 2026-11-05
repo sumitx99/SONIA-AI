@@ -308,8 +308,11 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
                             rendered_text, page_image = await asyncio.to_thread(
                                 render_page, url, screenshot=not backend["backup"])
                             page_text = rendered_text or page_text
-                        except (requests.RequestException, ValueError, OSError):
-                            logger.warning("The browser snapshot was unavailable")
+                        except requests.HTTPError as error:
+                            status = error.response.status_code if error.response is not None else "unknown"
+                            logger.warning("Cloudflare browser request failed (HTTP %s)", status)
+                        except (requests.RequestException, ValueError, OSError) as error:
+                            logger.warning("Cloudflare browser request failed (%s)", type(error).__name__)
                     is_error = not page_text and not page_image
                     text = f"Source URL: {url}\nPage text:\n{page_text}" if page_text else (
                         "The requested page did not return readable text. If asked to rate the page, "

@@ -31,6 +31,20 @@ PAGE = {"url": "https://official.example/pricing", "title": "Official pricing",
 
 
 class BrowserRenderingTests(unittest.TestCase):
+    def test_text_only_render_uses_content_endpoint(self):
+        url = "https://example.com/"
+        reply = response(200)
+        reply.iter_content.return_value = [json.dumps({
+            "success": True, "result": "<body>Rendered projects</body>",
+        }).encode()]
+        with patch.dict("os.environ", {"CLOUDFLARE_BROWSER_ACCOUNT_ID": "a" * 32,
+                                      "CLOUDFLARE_BROWSER_API_TOKEN": "test-token"}), \
+             patch.object(renderer, "public_addresses"), \
+             patch.object(renderer.requests, "post", return_value=reply) as post:
+            self.assertEqual(renderer.render_page(url, screenshot=False), ("Rendered projects", None))
+        self.assertTrue(post.call_args.args[0].endswith("/browser-run/content"))
+        self.assertNotIn("formats", post.call_args.kwargs["json"])
+
     def test_snapshot_returns_rendered_body_and_screenshot(self):
         url = "https://example.com/"
         reply = response(200)
