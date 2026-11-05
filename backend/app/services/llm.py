@@ -407,8 +407,13 @@ def stream_tool_backup(contents: list, declarations: list, allow_web: bool = Tru
         responses = [part["functionResponse"] for part in parts if "functionResponse" in part]
         if responses:
             for result in responses:
+                payload = result["response"]
+                if result.get("parts"):
+                    payload = {key: value for key, value in payload.items() if key != "desktop_viewport"}
+                    if payload.get("page_text_available") is False:
+                        payload = {**payload, "is_error": True, "result": "No readable page text is available."}
                 messages.append({"role": "tool", "tool_call_id": result["id"],
-                                 "content": json.dumps(result["response"], ensure_ascii=False)})
+                                 "content": json.dumps(payload, ensure_ascii=False)})
         elif turn.get("role") == "model":
             message = {"role": "assistant", "content": text or None}
             if calls:
@@ -595,9 +600,11 @@ def groq_web_answer(query: str, context: str, history=None):
 READ_WEB_PAGE_TOOL = {
     "name": "read_web_page",
     "description": ("Open an exact URL supplied by the user and return its readable text. "
-                    "Use this first when asked to evaluate or summarize that page."),
+                    "Use this first when asked to evaluate or summarize that page. "
+                    "Set visual=true for design, layout, or a general website rating."),
     "parametersJsonSchema": {"type": "object", "required": ["url"], "properties": {
-        "url": {"type": "string", "description": "The exact public page URL from the current request."}}},
+        "url": {"type": "string", "description": "The exact public page URL from the current request."},
+        "visual": {"type": "boolean", "description": "Request a desktop screenshot for visual feedback."}}},
 }
 
 # Offered to Gemini as a function when its own Google Search is paused or switched off.

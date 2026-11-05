@@ -16,6 +16,7 @@ parser.docling_enabled = Mock(return_value=False)
 sys.modules.setdefault("app.services.parsing.docling_utils", parser)
 llm = importlib.import_module("app.services.llm")
 agent = importlib.import_module("app.mcp_client.agent")
+renderer = importlib.import_module("app.services.page_rendering")
 
 
 def groq_reply(content, results):
@@ -27,6 +28,25 @@ def groq_reply(content, results):
 
 PAGE = {"url": "https://official.example/pricing", "title": "Official pricing",
         "content": "L0: \nL1: Flash-Lite costs $0.25 per million input tokens."}
+
+
+class BrowserRenderingTests(unittest.TestCase):
+    def test_snapshot_returns_rendered_body_and_screenshot(self):
+        url = "https://example.com/"
+        reply = response(200)
+        reply.iter_content.return_value = [json.dumps({
+            "success": True, "meta": {"status": 200, "finalUrl": url},
+            "result": {"content": "<head><title>Ignore</title></head><body>Rendered projects</body>",
+                       "screenshot": "/9j/example"},
+        }).encode()]
+        with patch.dict("os.environ", {"CLOUDFLARE_BROWSER_ACCOUNT_ID": "a" * 32,
+                                      "CLOUDFLARE_BROWSER_API_TOKEN": "test-token"}), \
+             patch.object(renderer, "public_addresses") as public, \
+             patch.object(renderer.requests, "post", return_value=reply) as post:
+            self.assertEqual(renderer.render_page(url, screenshot=True), ("Rendered projects", "/9j/example"))
+        public.assert_called_once_with("example.com")
+        self.assertEqual(post.call_args.kwargs["json"]["url"], url)
+        self.assertFalse(post.call_args.kwargs["allow_redirects"])
 
 
 class GoogleSearchQuotaTests(unittest.TestCase):
@@ -50,6 +70,30 @@ class GoogleSearchQuotaTests(unittest.TestCase):
 
 
 class WebSearchToolTests(unittest.TestCase):
+    def test_exact_url_sent_to_search_opens_and_renders_the_requested_page(self):
+        url = "https://example.com/"
+        call = {"functionCall": {"id": "review", "name": "web_search", "args": {"query": url}}}
+        rounds = iter([[call], [{"text": "The portfolio has a clear project section."}]])
+
+        async def run():
+            return [event async for event in agent.answer_with_tools(
+                "user-1", f"{url}\n\ncan u rate this site", "", [], {})]
+
+        with patch.object(agent, "URL_CONTEXT", True), \
+             patch.object(agent, "stream_gemini_parts", side_effect=lambda *args: iter(next(rounds))) as model, \
+             patch.object(agent, "read_source", return_value=""), \
+             patch.object(agent, "render_page", return_value=("Projects", "/9j/test")) as render, \
+             patch.object(agent, "search_web") as search:
+            events = asyncio.run(run())
+
+        search.assert_not_called()
+        render.assert_called_once_with(url, screenshot=True)
+        response = model.call_args.args[0][-1]["parts"][0]["functionResponse"]
+        self.assertEqual(response["name"], "web_search")
+        self.assertEqual(response["parts"][0]["inlineData"]["data"], "/9j/test")
+        self.assertIn("Projects", response["response"]["result"])
+        self.assertEqual(events[-1][0], "delta")
+
     def run_agent(self, rounds, search=None):
         seen = []
 

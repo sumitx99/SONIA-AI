@@ -23,6 +23,7 @@ from app.services.llm import (READ_WEB_PAGE_TOOL, URL_CONTEXT, WEB_SEARCH_TOOL, 
                               backup_configured, gemini_unavailable)
 from app.services.web_activity import WebActivity, requested_urls, safe_url
 from app.services.source_reader import read_source
+from app.services.page_rendering import render_page
 from app.services.images.web_images import IMAGE_SEARCH_TOOL, configured as image_search_configured, search_and_store
 from app.mcp_client import store
 from app.mcp_client.oauth import provider_for, needs_reauthorization
@@ -252,6 +253,9 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
             name, arguments = call.get("name", ""), call.get("args") or {}
             entry = registry.get(name)
             source_id = None
+            page_image = None
+            search_url = safe_url(str(arguments.get("query", "")).strip())
+            exact_url_search = name == WEB_SEARCH_TOOL["name"] and URL_CONTEXT and search_url in question_urls
             if entry is None and name == IMAGE_SEARCH_TOOL["name"]:
                 event = {"id": f"web-images-{uuid.uuid4().hex[:8]}", "server": "Web", "tool": "image_search",
                          "title": "Searching web images", "arguments": {"query": str(arguments.get("query", ""))[:250]}}
@@ -283,13 +287,14 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
                 yield "tool_call", {**event, "status": "error" if is_error else "done",
                     "title": "Web images unavailable" if is_error else "Web image search complete",
                     "summary": "No images were saved." if is_error else f"{len(images)} image previews saved."}
-            elif entry is None and name == READ_WEB_PAGE_TOOL["name"]:
-                url = safe_url(arguments.get("url"))
+            elif entry is None and (name == READ_WEB_PAGE_TOOL["name"] or exact_url_search):
+                url = search_url if exact_url_search else safe_url(arguments.get("url"))
                 if READ_WEB_PAGE_TOOL not in offered or url not in question_urls or url in attempted_pages or len(attempted_pages) >= MAX_DIRECT_PAGES:
                     text, is_error = "Only unread public links supplied in the current request may be opened.", True
                 else:
                     attempted_pages.add(url)
-                    event = {"id": f"web-page-{uuid.uuid4().hex[:8]}", "server": "Web", "tool": name,
+                    event = {"id": f"web-page-{uuid.uuid4().hex[:8]}", "server": "Web",
+                             "tool": READ_WEB_PAGE_TOOL["name"],
                              "title": "Reading web page", "arguments": {"url": url}}
                     yield "tool_call", {**event, "status": "running"}
                     try:
@@ -297,16 +302,27 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
                     except Exception:
                         logger.info("The requested public page could not be read")
                         page_text = ""
-                    is_error = not page_text
+                    visual = exact_url_search or arguments.get("visual") is True or not page_text
+                    if visual:
+                        try:
+                            rendered_text, page_image = await asyncio.to_thread(
+                                render_page, url, screenshot=not backend["backup"])
+                            page_text = rendered_text or page_text
+                        except (requests.RequestException, ValueError, OSError):
+                            logger.warning("The browser snapshot was unavailable")
+                    is_error = not page_text and not page_image
                     text = f"Source URL: {url}\nPage text:\n{page_text}" if page_text else (
                         "The requested page did not return readable text. If asked to rate the page, "
                         "explain this limitation and ask for screenshots. Do not search for reviews as a substitute.")
-                    if page_text:
+                    if page_image and not page_text:
+                        text = f"Source URL: {url}\nOnly a desktop viewport screenshot is available."
+                    if not is_error:
                         link = {"url": url, "title": url}
                         if len(sources) < MAX_SOURCES:
                             sources.setdefault(url, link)
                             yield "sources", {"sources": list(sources.values())}
-                        yield "evidence", {"sources": [{**link, "kind": "web", "text": page_text}]}
+                        if page_text:
+                            yield "evidence", {"sources": [{**link, "kind": "web", "text": page_text}]}
                     yield "tool_call", {**event, "status": "error" if is_error else "done",
                                         "title": "Page could not be read" if is_error else "Read web page"}
             elif entry is None and name == WEB_SEARCH_TOOL["name"]:
@@ -366,5 +382,10 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
                 **({"source_id": source_id} if source_id else {})}}
             if call.get("id"):
                 response["id"] = call["id"]
+            if page_image:
+                response["response"]["desktop_viewport"] = {"$ref": "desktop.jpg"}
+                response["response"]["page_text_available"] = bool(page_text)
+                response["parts"] = [{"inlineData": {"mimeType": "image/jpeg",
+                                                     "displayName": "desktop.jpg", "data": page_image}}]
             responses.append({"functionResponse": response})
         contents.append({"role": "user", "parts": responses})
