@@ -319,6 +319,8 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
                         "explain this limitation and ask for screenshots. Do not search for reviews as a substitute.")
                     if page_image and not page_text:
                         text = f"Source URL: {url}\nOnly a desktop viewport screenshot is available."
+                    elif visual and page_text and not page_image:
+                        text += "\nNo screenshot is available. Limit the review to the readable content."
                     if not is_error:
                         link = {"url": url, "title": url}
                         if len(sources) < MAX_SOURCES:
