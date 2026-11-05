@@ -18,10 +18,11 @@ import uuid
 import requests
 from fastapi.concurrency import iterate_in_threadpool
 
-from app.services.llm import (WEB_SEARCH_TOOL, conversation_turns, google_search_ready, search_web,
+from app.services.llm import (READ_WEB_PAGE_TOOL, URL_CONTEXT, WEB_SEARCH_TOOL, conversation_turns, google_search_ready, search_web,
                               stream_gemini_parts, web_search_available, stream_tool_backup,
                               backup_configured, gemini_unavailable)
 from app.services.web_activity import WebActivity, safe_url
+from app.services.source_reader import read_source
 from app.services.images.web_images import IMAGE_SEARCH_TOOL, configured as image_search_configured, search_and_store
 from app.mcp_client import store
 from app.mcp_client.oauth import provider_for, needs_reauthorization
@@ -32,6 +33,8 @@ logger = logging.getLogger(__name__)
 MAX_ROUNDS = 5
 MAX_TOOLS = 64
 MAX_SOURCES = 10
+MAX_DIRECT_PAGES = 3
+_QUESTION_URL = re.compile(r"""https?://[^\s<>()\[\]"']+""", re.IGNORECASE)
 APPROVAL_TIMEOUT = 120
 # approval id -> (user id, future resolved with True/False). One API instance, so in memory.
 _approvals: dict[str, tuple[str, asyncio.Future]] = {}
@@ -139,6 +142,9 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
     """Yields (event, data) while answering; text arrives as "delta" events."""
     contents = conversation_turns(query, context, history)
     sources: dict[str, dict] = {}
+    question_urls = {url for match in _QUESTION_URL.finditer(query)
+                     if (url := safe_url(match.group().rstrip(".,;!?")))}
+    attempted_pages = set()
     web = WebActivity()
     image_searches, image_count = 0, 0
     backend = {"backup": False}
@@ -169,6 +175,8 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
         offered = []
         if round_number < MAX_ROUNDS:
             offered = declarations + ([WEB_SEARCH_TOOL] if not google_search_ready() and web_search_available() else [])
+            if URL_CONTEXT and question_urls - attempted_pages and len(attempted_pages) < MAX_DIRECT_PAGES:
+                offered = offered + [READ_WEB_PAGE_TOOL]
             if image_search_configured() and image_searches < 2 and image_count < 3:
                 offered = offered + [IMAGE_SEARCH_TOOL]
         model_parts, calls, search_refused = [], [], False
@@ -275,6 +283,31 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
                 yield "tool_call", {**event, "status": "error" if is_error else "done",
                     "title": "Web images unavailable" if is_error else "Web image search complete",
                     "summary": "No images were saved." if is_error else f"{len(images)} image previews saved."}
+            elif entry is None and name == READ_WEB_PAGE_TOOL["name"]:
+                url = safe_url(arguments.get("url"))
+                if READ_WEB_PAGE_TOOL not in offered or url not in question_urls or url in attempted_pages or len(attempted_pages) >= MAX_DIRECT_PAGES:
+                    text, is_error = "Only unread public links supplied in the current request may be opened.", True
+                else:
+                    attempted_pages.add(url)
+                    event = {"id": f"web-page-{uuid.uuid4().hex[:8]}", "server": "Web", "tool": name,
+                             "title": "Reading web page", "arguments": {"url": url}}
+                    yield "tool_call", {**event, "status": "running"}
+                    try:
+                        page_text = (await asyncio.to_thread(read_source, url, include_head=False))[:6000]
+                    except Exception:
+                        logger.info("The requested public page could not be read")
+                        page_text = ""
+                    is_error = not page_text
+                    text = f"Source URL: {url}\nPage text:\n{page_text}" if page_text else (
+                        "The requested page did not return readable text. Do not claim it was reviewed.")
+                    if page_text:
+                        link = {"url": url, "title": url}
+                        if len(sources) < MAX_SOURCES:
+                            sources.setdefault(url, link)
+                            yield "sources", {"sources": list(sources.values())}
+                        yield "evidence", {"sources": [{**link, "kind": "web", "text": page_text}]}
+                    yield "tool_call", {**event, "status": "error" if is_error else "done",
+                                        "title": "Page could not be read" if is_error else "Read web page"}
             elif entry is None and name == WEB_SEARCH_TOOL["name"]:
                 search_query = str(arguments.get("query") or query)[:500]
                 event = {"id": f"web-search-{uuid.uuid4().hex[:8]}", "server": "Web", "tool": "web_search",

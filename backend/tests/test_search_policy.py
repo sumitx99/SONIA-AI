@@ -87,6 +87,30 @@ class WebSearchToolTests(unittest.TestCase):
         self.assertEqual(events[2][1]["sources"][0]["kind"], "web")
         search.assert_called_once_with("gemini pricing")
 
+    def test_backup_can_read_the_requested_page_and_rejects_an_unrequested_url(self):
+        url = PAGE["url"]
+        calls = [{"functionCall": {"name": "read_web_page", "args": {"url": target}}}
+                 for target in ("https://other.example/", url)]
+        rounds = iter([calls, [{"text": "The page lists pricing."}]])
+        error = llm.requests.HTTPError(response=Mock(status_code=429))
+
+        async def run():
+            return [event async for event in agent.answer_with_tools(
+                "user-1", f"Rate [this page]({url})", "", [], {})]
+
+        with patch.object(agent, "stream_gemini_parts", side_effect=error), \
+             patch.object(agent, "backup_configured", return_value=True), \
+             patch.object(agent, "URL_CONTEXT", True), \
+             patch.object(agent, "stream_tool_backup", side_effect=lambda *args, **kwargs: iter(next(rounds))) as backup, \
+             patch.object(agent, "read_source", return_value="Flash-Lite pricing") as read:
+            events = asyncio.run(run())
+
+        read.assert_called_once_with(url, include_head=False)
+        self.assertIn(llm.READ_WEB_PAGE_TOOL, backup.call_args_list[0].args[1])
+        self.assertNotIn(llm.READ_WEB_PAGE_TOOL, backup.call_args_list[1].args[1])
+        self.assertIn(("evidence", {"sources": [{"url": url, "title": url, "kind": "web",
+                                               "text": "Flash-Lite pricing"}]}), events)
+
 
 class GroqSearchTests(unittest.TestCase):
     def test_search_web_tries_the_next_model_and_keeps_page_text(self):

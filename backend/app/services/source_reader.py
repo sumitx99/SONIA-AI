@@ -14,17 +14,20 @@ USER_AGENT = f"Sonia/1.0 (+{os.getenv('FRONTEND_PUBLIC_URL', 'https://sonia-ai-m
 
 
 class PageText(HTMLParser):
-    def __init__(self):
+    def __init__(self, *, include_head=True):
         super().__init__()
+        self.hidden_tags = {"script", "style", "noscript", "svg"}
+        if not include_head:
+            self.hidden_tags.update({"head", "title"})
         self.hidden = 0
         self.parts = []
 
     def handle_starttag(self, tag, attrs):
-        if tag in {"script", "style", "noscript", "svg"}:
+        if tag in self.hidden_tags:
             self.hidden += 1
 
     def handle_endtag(self, tag):
-        if tag in {"script", "style", "noscript", "svg"}:
+        if tag in self.hidden_tags:
             self.hidden = max(0, self.hidden - 1)
 
     def handle_data(self, data):
@@ -78,11 +81,11 @@ def read_public_resource(url, max_bytes=1_000_000, allowed_types=("text/html", "
     raise ValueError("Too many source redirects")
 
 
-def read_source(url):
+def read_source(url, *, include_head=True):
     data, content_type = read_public_resource(url)
     text = data.decode("utf-8", errors="replace")
     if "text/html" in content_type:
-        parser = PageText()
+        parser = PageText(include_head=include_head)
         parser.feed(text)
         text = " ".join(parser.parts)
     return " ".join(text.split())[:30_000]

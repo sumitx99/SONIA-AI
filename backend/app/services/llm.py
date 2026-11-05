@@ -122,6 +122,9 @@ Format: a fenced code block with the language "plotly" containing only JSON:
 WEB_INSTRUCTION = """
 
 Web: you can read web pages whose links appear in the user's question{search}.
+- When asked to rate, review, or summarize a linked page, open that exact URL first
+  and base the answer on its contents. Look for third-party reviews only if requested.
+  If you cannot read the page, say what you could access and limit the evaluation to it.
 - Decide whether research is necessary from the meaning of the CURRENT request and its context.
 - Do not search for conversational acknowledgements, greetings, creative tasks or facts already
   supported by the provided document. Do search for missing factual evidence and changing facts.
@@ -518,7 +521,9 @@ class WebSearchUnavailable(BackupUnavailable):
 
 GROQ_WEB_INSTRUCTION = """
 You have a browser_search tool for live public web research. Decide whether to use it from
-the current request's meaning and context. Do not search for conversational replies,
+the current request's meaning and context. When asked to evaluate a linked page, open
+the exact URL first and use its contents. Look for third-party reviews only if requested.
+If the page cannot be read, report that limitation. Do not search for conversational replies,
 creative tasks, or facts already supported by documents. Search for missing factual
 evidence and current facts, unless the user says not to browse. Never rely on a
 previous assistant answer as evidence. Search when needed and
@@ -577,6 +582,14 @@ def groq_web_answer(query: str, context: str, history=None):
         return
     raise WebSearchUnavailable("All Groq web-search models are unavailable")
 
+
+READ_WEB_PAGE_TOOL = {
+    "name": "read_web_page",
+    "description": ("Open an exact URL supplied by the user and return its readable text. "
+                    "Use this first when asked to evaluate or summarize that page."),
+    "parametersJsonSchema": {"type": "object", "required": ["url"], "properties": {
+        "url": {"type": "string", "description": "The exact public page URL from the current request."}}},
+}
 
 # Offered to Gemini as a function when its own Google Search is paused or switched off.
 WEB_SEARCH_TOOL = {
