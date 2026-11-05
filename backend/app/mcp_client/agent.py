@@ -153,7 +153,12 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
                 generated = True
                 yield part
         except Exception as error:
-            if generated or not gemini_unavailable(error) or not backup_configured():
+            # A rejected catalog can still be usable on the backup model. Switch before
+            # the first round produces anything, so native Gemini turns need no translation.
+            rejected_catalog = (round_number == 0 and bool(declarations) and
+                                isinstance(error, requests.HTTPError) and error.response is not None and
+                                error.response.status_code == 400)
+            if generated or not (gemini_unavailable(error) or rejected_catalog) or not backup_configured():
                 raise
             backend["backup"] = True
             # Keep the connected tools; their execution and approvals remain in this loop.
@@ -211,7 +216,7 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
         except requests.HTTPError as error:
             # Gemini rejects the whole request when one connected tool's schema is invalid. That
             # happens before anything is generated, so ask again without the connected tools.
-            if error.response is not None and error.response.status_code == 400 and declarations:
+            if not backend["backup"] and error.response is not None and error.response.status_code == 400 and declarations:
                 logger.warning("Gemini rejected the connected tools; answering without them: %s",
                                error.response.text[:300])
                 declarations = []

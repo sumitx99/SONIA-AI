@@ -66,6 +66,19 @@ class ToolFallbackTests(unittest.TestCase):
         execute.assert_awaited_once()
         self.assertIn("Saved note", str(seen[1][0]))
 
+    def test_first_round_catalog_rejection_preserves_connected_tools_on_backup(self):
+        declarations, tools = registry("allow")
+
+        async def run():
+            return [event async for event in agent.answer_with_tools("user1", "read", "", declarations, tools)]
+
+        error = requests.HTTPError(response=Mock(status_code=400))
+        with patch.object(agent, "stream_gemini_parts", side_effect=error), \
+             patch.object(agent, "backup_configured", return_value=True), \
+             patch.object(agent, "stream_tool_backup", return_value=iter(ANSWER)) as backup:
+            self.assertEqual(asyncio.run(run()), [("delta", {"text": "Done."})])
+        self.assertIn(declarations[0], backup.call_args.args[1])
+
     def test_fallback_cannot_bypass_mcp_approval(self):
         declarations, tools = registry("ask")
         rounds = iter([CALL, ANSWER])
@@ -137,15 +150,40 @@ class ToolFallbackTests(unittest.TestCase):
 
 
 class BackupRequestSizeTests(unittest.TestCase):
-    def test_oversized_requests_drop_connected_tools_then_shorten_the_context(self):
+    def test_oversized_context_is_shortened_without_dropping_connected_tools(self):
         messages = [{"role": "system", "content": "S" * 8000}, {"role": "user", "content": "C" * 40000}]
         tools = [{"type": "function", "function": {"name": name, "description": "d" * 3000, "parameters": {}}}
                  for name in ("c0__zapier", "web_search")]
         fitted, kept = llm._fit_groq_request(messages, tools)
-        self.assertEqual([tool["function"]["name"] for tool in kept], ["web_search"])
+        self.assertEqual([tool["function"]["name"] for tool in kept], ["c0__zapier", "web_search"])
         self.assertEqual(fitted[0]["content"], "S" * 8000)
         self.assertLessEqual(llm._estimated_tokens([fitted, kept]), llm.GROQ_REQUEST_TOKENS)
-        self.assertTrue(fitted[1]["content"].endswith("[shortened to fit the backup model]"))
+        self.assertTrue(fitted[1]["content"].startswith("…[shortened to fit the backup model]"))
+
+    def test_large_catalog_reuses_the_selected_tool_with_its_full_schema(self):
+        schema = {"type": "object", "properties": {"profile_url": {"type": "string"}}, "required": ["profile_url"]}
+        declarations = [{"name": f"c0__tool_{index}", "description": "d" * 1024,
+                         "parametersJsonSchema": schema} for index in range(40)]
+        selected = declarations[-1]["name"]
+        choose = {"functionCall": {"name": "select_tools", "args": {"names": ["invented", selected]}}}
+        execute = {"functionCall": {"id": "profile", "name": selected,
+                                    "args": {"profile_url": "https://example.com/profile"}}}
+        contents = llm.conversation_turns("Use the connected service to read a profile", "")
+        with patch.object(llm, "_stream_groq_parts",
+                          side_effect=[iter([choose]), iter([execute]), iter(ANSWER), iter(ANSWER)]) as stream:
+            self.assertEqual(list(llm.stream_tool_backup(contents, declarations, allow_web=False)), [execute])
+            contents.extend([{"role": "model", "parts": [execute]}, {"role": "user", "parts": [{
+                "functionResponse": {"id": "profile", "name": selected, "response": {"headline": "Engineer"}}}]}])
+            self.assertEqual(list(llm.stream_tool_backup(contents, declarations, allow_web=False)), ANSWER)
+            self.assertEqual(list(llm.stream_tool_backup(contents, [], allow_web=False)), ANSWER)
+        selection, execution, follow_up, final = stream.call_args_list
+        self.assertEqual(selection.kwargs["tool_choice"], "required")
+        self.assertIn(selected, selection.args[0][1]["content"])
+        self.assertEqual([tool["function"] for tool in execution.args[1]], [{
+            "name": selected, "description": "d" * 1024, "parameters": schema}])
+        self.assertEqual(follow_up.args[1], execution.args[1])
+        self.assertEqual(json.loads(follow_up.args[0][-1]["content"]), {"headline": "Engineer"})
+        self.assertEqual(final.args[1], [])
 
     def test_small_requests_are_sent_unchanged(self):
         messages = [{"role": "system", "content": "rules"}, {"role": "user", "content": "question"}]
