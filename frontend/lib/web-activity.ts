@@ -5,7 +5,7 @@ export function publicToolCalls(calls: ToolCall[] = []): ToolCall[] {
   return calls.flatMap(call => {
     if (call.server !== "Web") return [call];
     if (["web-backup", "web-search-unavailable"].includes(call.id)) return [];
-    const reading = call.tool === "url_context";
+    const reading = call.tool === "url_context" || call.tool === "read_web_page";
     const images = call.tool === "image_search" || call.tool === "google_search_images";
     const title = call.status === "running" ? (images ? "Searching web images" : reading ? "Reading web pages" : "Searching the web")
       : call.status === "error" ? (images ? "Web images unavailable" : reading ? "Page could not be read" : "Web search unavailable")

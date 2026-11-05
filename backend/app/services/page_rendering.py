@@ -35,7 +35,7 @@ def _page_text(html):
 def _crawl_page(endpoint, headers, payload):
     url = payload["url"]
     with requests.post(endpoint, headers=headers, json={
-        **payload, "limit": 1, "depth": 0, "source": "links", "render": True,
+        **payload, "limit": 1, "depth": 1, "source": "links", "render": True,
         "formats": ["html"], "crawlPurposes": ["ai-input"],
     }, timeout=(3, 8), allow_redirects=False, stream=True) as response:
         started = _read_json(response)
@@ -103,11 +103,15 @@ def render_page(url: str, *, screenshot: bool) -> tuple[str, str | None]:
             or target.username or target.password or target.query):
         return "", None
     public_addresses(target.hostname)
-    host = re.escape(target.hostname.encode("idna").decode("ascii"))
+    # IDNA hostnames contain only letters, digits, hyphens and dots. Escape just the dots so the
+    # pattern stays valid for Cloudflare's JavaScript RegExp (Python's re.escape also escapes "-").
+    host = target.hostname.encode("idna").decode("ascii").replace(".", r"\.")
     payload = {
         "url": url,
         "allowRequestPattern": [rf"^https://{host}(?::443)?/"],
-        "gotoOptions": {"waitUntil": "networkidle2", "timeout": 8000},
+        # "load" runs the page's scripts (SPAs render on it); network-idle waits never finish on
+        # pages that keep polling or streaming, which Cloudflare reports as a 422 timeout.
+        "gotoOptions": {"waitUntil": "load", "timeout": 8000},
     }
     action = "snapshot" if screenshot else "content"
     if screenshot:

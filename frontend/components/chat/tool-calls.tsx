@@ -77,7 +77,7 @@ export function ToolCalls({ calls: rawCalls }: { calls?: ToolCall[] }) {
             </summary>
             {call.arguments && Object.keys(call.arguments).length > 0 && (
               call.server === "Web" ? <div className="tool-chip-detail web-step-detail">
-                <span>{call.tool === "url_context" ? "Pages" : "Search queries"}</span>
+                <span>{["url_context", "read_web_page"].includes(call.tool) ? "Pages" : "Search queries"}</span>
                 {Object.values(call.arguments).flat().filter((value): value is string => typeof value === "string").map((value, index) => <p key={index}>{value}</p>)}
               </div> : <pre className="tool-chip-detail">{JSON.stringify(call.arguments, null, 2)}</pre>
             )}
