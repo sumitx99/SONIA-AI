@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { Brand, Emblem } from "@/components/brand";
 import { Reveal } from "@/components/reveal";
-import { ConversationPreview } from "@/components/landing/conversation-preview";
+import { FeaturePreview } from "@/components/landing/feature-preview";
 import { LandingMotion, MotionToggle } from "@/components/landing/landing-motion";
 import {
   SculptureStage,
@@ -152,7 +152,7 @@ export default function LandingPage() {
                   </span>
                   <span className="studio-micro">ON YOUR DESK</span>
                   <span className="studio-demo-file">
-                    <FileText size={15} /> The creative process.pdf
+                    <FileText size={15} /> Reports, research & tools
                   </span>
                   <div>
                     <Emblem />
@@ -164,7 +164,7 @@ export default function LandingPage() {
                   </div>
                 </aside>
                 <div className="studio-demo-chat">
-                  <ConversationPreview />
+                  <FeaturePreview />
                 </div>
               </div>
             </Reveal>

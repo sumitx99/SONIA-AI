@@ -21,6 +21,8 @@ import {
   Paperclip,
   Pencil,
   Plus,
+  Play,
+  Square,
   Trash2,
   X,
 } from "lucide-react";
@@ -54,6 +56,8 @@ export default function SoniaChatInterface() {
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editedPrompt, setEditedPrompt] = useState("");
   const [generatingId, setGeneratingId] = useState<string | null>(null);
+  const [stopped, setStopped] = useState<{ id: string; query: string; hasText: boolean } | null>(null);
+  const answerController = useRef<AbortController | null>(null);
   const [pending, setPending] = useState<{
     id: string;
     kind: "answer" | "upload";
@@ -72,9 +76,10 @@ export default function SoniaChatInterface() {
   const busy = useRef(false);
   const current = sessions.find((session) => session.id === currentId);
   const messages = current?.messages ?? [];
+  const answeringHere = !!generatingId && generatingId === currentId;
   const toolStepCount = messages[messages.length - 1]?.tool_calls?.length ?? 0;
 
-  useEffect(() => { setCurrentId(null); setDeleteTarget(null); }, [session?.user.id]);
+  useEffect(() => { setCurrentId(null); setDeleteTarget(null); setStopped(null); return () => answerController.current?.abort(); }, [session?.user.id]);
 
   useEffect(() => {
     if (historyLoaded && !currentId && sessions.length) setCurrentId(sessions[0].id);
@@ -115,17 +120,25 @@ export default function SoniaChatInterface() {
     );
   }
 
-  async function ask(replacement?: { messageId: string; content: string }) {
-    const query = (replacement?.content ?? input).trim();
+  async function ask(replacement?: { messageId: string; content: string }, resume = false) {
+    const continuation = resume && stopped?.id === currentId ? stopped : null;
+    if (resume && !continuation) return;
+    const query = (continuation ? continuation.hasText
+      ? "Continue the interrupted answer from where it stopped. Do not repeat the existing answer or any completed tool actions. Cite sources for additional factual claims."
+      : continuation.query : replacement?.content ?? input).trim();
     if (!query || busy.current || !historyLoaded) return;
     if (replacement && !messages.some(m => m.id === replacement.messageId && m.sender === "user")) return;
     busy.current = true;
+    const controller = new AbortController();
+    answerController.current = controller;
+    setStopped(null);
     const id = currentId ?? newChat();
     const branch = replacement ? editConversation(messages, replacement.messageId, query) : null;
-    const before = branch?.before ?? messages;
+    const before = branch?.before ?? (continuation && !continuation.hasText
+      ? messages.slice(0, messages.findLastIndex(message => message.sender === "user")) : messages);
     if (branch) {
       setSessions(previous => previous.map(chat => chat.id === id ? { ...chat, messages: branch.messages } : chat));
-    } else {
+    } else if (!continuation) {
       append(id, { id: crypto.randomUUID(), content: query, sender: "user" });
     }
     setGeneratingId(id);
@@ -141,7 +154,7 @@ export default function SoniaChatInterface() {
             : session,
         ),
       );
-    setInput("");
+    if (!continuation) setInput("");
     setPending({ id, kind: "answer" });
     const answerId = crypto.randomUUID();
     let meta: { images?: ImageAttachment[]; image_notice?: string | null } = {};
@@ -186,14 +199,19 @@ export default function SoniaChatInterface() {
           text = answer;
           update({ content: answer, citations });
         },
-      }, conversationHistory(before));
+      }, conversationHistory(before), controller.signal);
+      controller.signal.throwIfAborted();
       toolCalls = toolCalls.map(call => call.status === "running" ? { ...call, status: cutOff ? "error" as const : "done" as const } : call);
       update({
         streaming: false, tool_calls: toolCalls,
         ...(cutOff && { notice: "The answer was cut off part-way. Ask again to get the rest." }),
       });
     } catch (error) {
-      if (started) {
+      if (controller.signal.aborted) {
+        setStopped({ id, query: continuation?.query ?? query, hasText: !!text || !!continuation?.hasText });
+        if (started) update({ streaming: false, notice: "Answer stopped. Resume to continue.",
+          tool_calls: toolCalls.map(call => call.status === "running" || call.status === "awaiting_approval" ? { ...call, status: "denied" } : call) });
+      } else if (started) {
         update({ streaming: false, tool_calls: toolCalls.map(call => call.status === "running" ? { ...call, status: "error" } : call),
           ...(text ? { notice: "The answer was cut off part-way. Ask again to get the rest." }
             : { content: handleApiError(error), error: true }) });
@@ -208,6 +226,7 @@ export default function SoniaChatInterface() {
         });
       }
     } finally {
+      if (answerController.current === controller) answerController.current = null;
       busy.current = false;
       setGeneratingId(null);
       setPending(null);
@@ -605,26 +624,29 @@ export default function SoniaChatInterface() {
                 onKeyDown={onKeyDown}
                 placeholder="What’s on your mind?"
                 rows={2}
-                disabled={!!pending || !historyLoaded}
+                disabled={!!pending || !!generatingId || !historyLoaded}
               />
               <div className="composer-controls">
                 <button
                   type="button"
                   className="attach-button"
                   onClick={() => fileInput.current?.click()}
-                  disabled={!!pending}
+                  disabled={!!pending || !!generatingId || !historyLoaded}
                 >
                   <Paperclip size={16} />
                   <span>Add a PDF</span>
                 </button>
-                <span className="composer-hint mono">ENTER TO SEND</span>
+                <span className="composer-hint mono">{answeringHere ? "ANSWERING…" : pending?.kind === "upload" ? "UPLOADING PDF…" : "ENTER TO SEND"}</span>
+                {stopped?.id === currentId && !generatingId && <button type="button" className="resume-answer-button" disabled={!!pending || !historyLoaded} onClick={() => void ask(undefined, true)}><Play size={14} />Resume</button>}
                 <button
                   className="send-button"
-                  type="submit"
-                  aria-label="Send message"
-                  disabled={!input.trim() || !!pending}
+                  type={answeringHere ? "button" : "submit"}
+                  aria-label={answeringHere ? "Stop answering" : "Send message"}
+                  title={answeringHere ? "Stop answering" : "Send message"}
+                  onClick={answeringHere ? () => answerController.current?.abort() : undefined}
+                  disabled={!answeringHere && (!input.trim() || !!pending || !!generatingId || !historyLoaded)}
                 >
-                  <ArrowUp size={20} />
+                  {answeringHere ? <Square size={16} fill="currentColor" /> : <ArrowUp size={20} />}
                 </button>
               </div>
             </form>

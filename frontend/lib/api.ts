@@ -236,7 +236,7 @@ export const uploadPDF = async (file: File, chatId?: string, onStatus?: (status:
 };
 
 // Send chat message to backend
-export const sendMessage = async (query: string, documentIds?: number[], history: { sender: "user" | "bot"; content: string }[] = []): Promise<ChatResponse> => {
+export const sendMessage = async (query: string, documentIds?: number[], history: { sender: "user" | "bot"; content: string }[] = [], signal?: AbortSignal): Promise<ChatResponse> => {
   try {
     const formData = new FormData();
     formData.append("query", query);
@@ -249,6 +249,7 @@ export const sendMessage = async (query: string, documentIds?: number[], history
     const response = await apiFetch("/chat", {
       method: "POST",
       body: formData,
+      signal,
     });
 
     if (!response.ok) {
@@ -285,6 +286,7 @@ export interface StreamHandlers {
 export const streamMessage = async (
   query: string, documentIds: number[] | undefined, handlers: StreamHandlers,
   history: { sender: "user" | "bot"; content: string }[] = [],
+  signal?: AbortSignal,
 ): Promise<{ cutOff: boolean }> => {
   const formData = new FormData();
   formData.append("query", query);
@@ -293,11 +295,12 @@ export const streamMessage = async (
     formData.append("scope_documents", "true");
     documentIds.forEach((id) => formData.append("document_ids", String(id)));
   }
-  const response = await apiFetch("/chat/stream", { method: "POST", body: formData });
+  const response = await apiFetch("/chat/stream", { method: "POST", body: formData, signal });
 
   // An API deployed before streaming existed: fall back to the one-shot endpoint.
   if (response.status === 404) {
-    const { answer, citations, web_images, ...meta } = await sendMessage(query, documentIds, history);
+    const { answer, citations, web_images, ...meta } = await sendMessage(query, documentIds, history, signal);
+    signal?.throwIfAborted();
     handlers.onMeta?.(meta);
     handlers.onDelta(answer);
     if (web_images?.length) handlers.onWebImages?.(web_images);
@@ -312,14 +315,17 @@ export const streamMessage = async (
   const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
   let buffer = "";
   let wroteText = false;
+  try {
   for (;;) {
     const { value, done } = await reader.read();
+    signal?.throwIfAborted();
     if (done) break;
     buffer += value;
     // Events are separated by a blank line; keep a trailing partial event for the next read.
     const frames = buffer.split("\n\n");
     buffer = frames.pop() ?? "";
     for (const frame of frames) {
+      signal?.throwIfAborted();
       let event = "message";
       let data = "";
       for (const line of frame.split("\n")) {
@@ -346,6 +352,10 @@ export const streamMessage = async (
   // The connection closed without a "done" event.
   if (!wroteText) throw new Error("The answer didn't arrive");
   return { cutOff: true };
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
 };
 
 // Renew expired image links without asking the model to generate another answer.
