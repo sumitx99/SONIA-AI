@@ -68,6 +68,8 @@ export interface Citation {
   title: string;
   quote: string;
   verified: boolean;
+  /** The page exists but could not be read (login wall, blocks bots): the quote was not checked. */
+  source_unreadable?: boolean;
   url?: string | null;
   document_id?: number | null;
   chunk_id?: number | null;

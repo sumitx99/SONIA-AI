@@ -78,6 +78,8 @@ class SavedCitation(BaseModel):
     title: str = Field("", max_length=300)
     quote: str = Field("", max_length=1000)
     verified: bool = False
+    # The source exists but its text could not be read, so the quote was never checked.
+    source_unreadable: bool = False
     url: str | None = Field(None, max_length=2048, pattern=r"^https?://")
     document_id: int | None = None
     chunk_id: int | None = None

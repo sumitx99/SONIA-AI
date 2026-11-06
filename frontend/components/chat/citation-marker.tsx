@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import * as Popover from "@radix-ui/react-popover";
-import { AlertTriangle, BadgeCheck, ExternalLink, FileText, Globe, Loader2, Wrench } from "lucide-react";
+import { AlertTriangle, BadgeCheck, CircleHelp, ExternalLink, FileText, Globe, Loader2, Wrench } from "lucide-react";
 import { handleApiError, loadDocumentSource, type Citation } from "@/lib/api";
 import styles from "./citation-marker.module.css";
 
@@ -42,10 +42,18 @@ function OpenDocument({ documentId }: { documentId: number }) {
   );
 }
 
+/** Found in the source, checked and not found, or not checkable because the page could not be read. */
+function checkState(citation: Citation) {
+  if (citation.verified) return { className: "", label: "", Icon: BadgeCheck, text: "Found in source", tone: styles.verified };
+  if (citation.source_unreadable) return { className: styles.unchecked, label: " (could not be checked)", Icon: CircleHelp,
+    text: "Page couldn’t be opened to check this quote", tone: styles.unknown };
+  return { className: styles.unverified, label: " (not verified)", Icon: AlertTriangle, text: "Not found in source", tone: styles.warning };
+}
+
 /**
  * A numbered citation in an answer. Opens a card with the source and the exact quote, marked
- * verified only when the backend found that quote in the source. While the answer is still
- * streaming the number shows without details.
+ * verified only when the backend found that quote in the source, and neutral when the source
+ * could not be read to check it. While the answer is still streaming the number shows without details.
  */
 export function CitationMarker({ n, citation, pending }: { n: number; citation?: Citation; pending: boolean }) {
   if (!citation) {
@@ -53,11 +61,12 @@ export function CitationMarker({ n, citation, pending }: { n: number; citation?:
                 title={pending ? undefined : "No source was given for this citation"}>{n}</sup>;
   }
   const Icon = KIND[citation.kind];
+  const check = checkState(citation);
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
-        <button type="button" className={`${styles.marker} ${citation.verified ? "" : styles.unverified}`}
-                aria-label={`Source ${n}: ${citation.title}${citation.verified ? "" : " (not verified)"}`}>
+        <button type="button" className={`${styles.marker} ${check.className}`}
+                aria-label={`Source ${n}: ${citation.title}${check.label}`}>
           {n}
         </button>
       </Popover.Trigger>
@@ -70,9 +79,7 @@ export function CitationMarker({ n, citation, pending }: { n: number; citation?:
           {citation.url && <p className={styles.host}>{hostOf(citation.url)}</p>}
           <blockquote className={styles.quote}>“{citation.quote}”</blockquote>
           <footer className={styles.footer}>
-            {citation.verified
-              ? <span className={styles.verified}><BadgeCheck size={13} aria-hidden /> Found in source</span>
-              : <span className={styles.warning}><AlertTriangle size={13} aria-hidden /> Not found in source</span>}
+            <span className={check.tone}><check.Icon size={13} aria-hidden /> {check.text}</span>
             {citation.url && (
               <a className={styles.link} href={citation.url} target="_blank" rel="noopener noreferrer nofollow">
                 <ExternalLink size={12} /> Open page

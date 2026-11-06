@@ -18,6 +18,7 @@
 button.marker:hover { border-color: #b9a88f; background: #ebe1cf; }
 button.marker:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
 .unverified { border-color: #e2b4a8; background: #fbece7; color: #a13c2b; }
+.unchecked { border-color: #d4d1cb; background: #f1f0ed; color: #6f6b64; }
 .pending { opacity: 0.6; cursor: default; }
 .missing { border-style: dashed; color: #8a7e6c; cursor: help; }
 
@@ -52,9 +53,10 @@ button.marker:focus-visible { outline: 2px solid var(--ring); outline-offset: 1p
   overflow-wrap: anywhere;
 }
 .footer { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; font-size: 12px; }
-.verified, .warning { display: inline-flex; align-items: center; gap: 5px; margin-right: auto; }
+.verified, .warning, .unknown { display: inline-flex; align-items: center; gap: 5px; margin-right: auto; }
 .verified { color: #4f6b3d; }
 .warning { color: #a13c2b; }
+.unknown { color: #6f6b64; }
 .link {
   display: inline-flex;
   align-items: center;

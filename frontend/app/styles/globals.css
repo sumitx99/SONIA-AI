@@ -3513,6 +3513,8 @@ h2 {
   font-size: 11px;
   color: #8a7e6c;
 }
+.tool-chip.is-running { border-color: #6d4fc233; }
+.tool-chip.is-running .tool-chip-status { color: #6d4fc2; }
 .tool-chip.is-done .tool-chip-status { color: #4f6b3d; }
 .tool-chip.is-error .tool-chip-status,
 .tool-chip.is-denied .tool-chip-status { color: #a13c2b; }
@@ -3614,9 +3616,9 @@ pre.tool-chip-detail { font-family: var(--font-geist-mono), monospace; }
 .tool-chip.is-web { border-color:#dededb; background:#f5f5f2; }
 .tool-chip.is-web summary { padding:10px 12px; color:#555; }
 .tool-chip.is-web summary > svg { color:#888; }
-.tool-chip.is-web.is-running { border-color:#df3d3333; }
+.tool-chip.is-web.is-running { border-color:#6d4fc233; }
 .tool-chip.is-web.is-running .tool-chip-name { color:#333; }
-.tool-chip.is-web.is-running .tool-chip-status { color:#bf554d; }
+.tool-chip.is-web.is-running .tool-chip-status { color:#6d4fc2; }
 .tool-chip.is-web .tool-chip-detail { background:#fafaf7; color:#777; border-color:#e5e5df; }
 .web-step-detail > span { display:block; margin-bottom:5px; font-size:10px; color:#999; }
 .web-step-detail > p { margin:4px 0; color:#666; }

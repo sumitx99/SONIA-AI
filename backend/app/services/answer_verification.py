@@ -3,7 +3,9 @@
 The model ends its answer with a ```citations block: [{"n", "source", "quote"}]. Each quote is
 looked up in the cited source's own text: a document passage, a tool result, or a web page the
 answer actually used (pages the search already read, otherwise fetched safely). Only what the
-source really says is marked verified; unknown sources are never linked.
+source really says is marked verified; unknown sources are never linked. A real source whose text
+could not be read (a page behind a login or blocking bots) is marked `source_unreadable`: its
+quote was not checked, which is different from being checked and not found.
 """
 import json
 import logging
@@ -135,7 +137,8 @@ def check_citations(answer: str, context: str, web_sources=(), evidence=()) -> t
             citation = {"kind": "unknown", "title": "Unknown source", "text": ""}
         text = citation.pop("text")
         citation.update(n=number, quote=quote,
-                        verified=len(quote) >= 8 and _normalized(quote) in _normalized(text))
+                        verified=len(quote) >= 8 and _normalized(quote) in _normalized(text),
+                        source_unreadable=citation["kind"] == "web" and not text.strip())
         citations.append(citation)
     return body, sorted(citations, key=lambda item: item["n"])
 
@@ -147,6 +150,8 @@ def with_footnotes(body: str, citations: list[dict]) -> str:
     lines = []
     for citation in citations:
         where = citation.get("url") or citation["title"]
-        status = "verified" if citation["verified"] else "not verified"
+        status = ("verified" if citation["verified"] else
+                  "could not be checked: the page could not be read" if citation.get("source_unreadable")
+                  else "not verified")
         lines.append(f"[{citation['n']}] {citation['title']} — “{citation['quote']}” ({status}) {where}".rstrip())
     return body + "\n\nSources:\n" + "\n".join(lines)
