@@ -66,6 +66,49 @@ test('automatic upload retries reuse a request ID and keep the document scope', 
   assert.equal(calls[1].get('chat_id'), 'chat-1');
 });
 
+test('an upload still running elsewhere is waited for without using up the normal retries', async (t) => {
+  const calls = [];
+  const waits = [];
+  const timer = globalThis.setTimeout;
+  t.mock.method(globalThis, 'setTimeout', (fn, ms, ...args) => { if (ms !== 180_000) waits.push(ms); return timer(fn, ms === 180_000 ? ms : 0, ...args); });
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    calls.push(init.body);
+    if (calls.length <= 3) return new Response(JSON.stringify({ detail: 'Still processing' }), { status: 409, headers: { 'Retry-After': '30' } });
+    if (calls.length <= 5) return response(503, { detail: 'Starting' });
+    return response(200, { file_id: 7, images_status: 'processing' });
+  });
+  const result = await client().uploadPDF(new File(['%PDF-demo'], 'demo.pdf'), 'chat-1');
+  assert.equal(result.file_id, 7);
+  assert.equal(calls.length, 6);
+  assert.deepEqual(waits.slice(0, 3), [30_000, 30_000, 30_000]);
+  assert.equal(new Set(calls.map((body) => body.get('request_id'))).size, 1);
+});
+
+test('image status is polled until background processing finishes', async (t) => {
+  const timer = globalThis.setTimeout;
+  t.mock.method(globalThis, 'setTimeout', (fn, ms, ...args) => timer(fn, 0, ...args));
+  const urls = [];
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    urls.push(url);
+    if (urls.length === 1) return response(200, { images_status: 'processing', images_stored: 0 });
+    if (urls.length === 2) return response(502, { detail: 'Restarting' });
+    return response(200, { images_status: 'ready', images_stored: 52 });
+  });
+  const status = await client().waitForDocumentImages(7);
+  assert.deepEqual(status, { images_status: 'ready', images_stored: 52 });
+  assert.equal(urls.length, 3);
+  assert.match(urls[0], /\/documents\/7\/status$/);
+});
+
+test('waiting for images stops when the document no longer exists', async (t) => {
+  const timer = globalThis.setTimeout;
+  t.mock.method(globalThis, 'setTimeout', (fn, ms, ...args) => timer(fn, 0, ...args));
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => { calls++; return response(404, { detail: 'Document not found' }); });
+  assert.deepEqual(await client().waitForDocumentImages(7), { images_status: null, images_stored: 0 });
+  assert.equal(calls, 1);
+});
+
 test('an expired access token is renewed before retrying instead of signing out', async (t) => {
   const headers = [];
   let signedOut = false;

@@ -85,6 +85,8 @@ export interface ChatMessage {
   tool_calls?: ToolCall[];
   sources?: WebSource[];
   citations?: Citation[];
+  /** Set while this upload message's document still has images in background processing. */
+  images_pending_document_id?: number | null;
 }
 
 export interface ChatSession {
@@ -171,8 +173,46 @@ export interface UploadResponse {
   chunks_stored: number;
   message?: string;
   images_stored?: number;
-  images_status?: "ready" | "disabled" | "failed";
+  images_status?: ImagesStatus;
   warnings?: string[];
+}
+
+export type ImagesStatus = "processing" | "ready" | "disabled" | "failed";
+
+export interface DocumentStatus {
+  images_status: ImagesStatus | null;
+  images_stored: number;
+  warnings?: string[];
+}
+
+/** The document's processing state, or null when it no longer exists (e.g. it was deleted). */
+export async function getDocumentStatus(documentId: number): Promise<DocumentStatus | null> {
+  const response = await apiFetch(`/documents/${documentId}/status`);
+  if (response.status === 404) return null;
+  if (!response.ok) throw await responseError(response);
+  return response.json();
+}
+
+// Images are processed in the background after the text is ready; poll until that finishes.
+export async function waitForDocumentImages(documentId: number, signal?: AbortSignal,
+  intervalMs = 5_000, timeoutMs = 15 * 60_000): Promise<DocumentStatus> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    if (signal?.aborted) throw new DOMException("Stopped waiting for images", "AbortError");
+    try {
+      const status = await getDocumentStatus(documentId);
+      if (status === null) return { images_status: null, images_stored: 0 };
+      if (status.images_status !== "processing") return status;
+    } catch (error) {
+      if (error instanceof AuthRequiredError) throw error;
+      // A sleeping or restarting server answers again shortly; keep waiting until the deadline.
+    }
+    if (Date.now() > deadline) {
+      return { images_status: "failed", images_stored: 0,
+        warnings: ["Images are taking longer than expected. Reopen this chat later to use them."] };
+    }
+  }
 }
 
 export interface ChatResponse {
@@ -194,6 +234,9 @@ export interface ApiError {
 export const uploadPDF = async (file: File, chatId?: string, onStatus?: (status: string) => void): Promise<UploadResponse> => {
   if (file.size > 25 * 1024 * 1024) throw new Error("Please upload a PDF smaller than 25 MB.");
   const requestId = crypto.randomUUID();
+  // An earlier attempt may still be running (or its server may have just died): the server answers
+  // 409 until it finishes or is known to be dead, so those waits don't use up the normal retries.
+  let conflictWaits = 0;
   for (let attempt = 0; attempt < 3; attempt++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 180_000);
@@ -211,6 +254,14 @@ export const uploadPDF = async (file: File, chatId?: string, onStatus?: (status:
     });
 
     if (!response.ok) {
+      if (response.status === 409 && conflictWaits < 6) {
+        conflictWaits++;
+        attempt--;
+        onStatus?.("Your earlier upload attempt is still being checked. Waiting a moment…");
+        const retryAfter = Number(response.headers.get("Retry-After"));
+        await new Promise((resolve) => setTimeout(resolve, (retryAfter > 0 ? retryAfter : 30) * 1000));
+        continue;
+      }
       if (attempt < 2 && [429, 500, 502, 503, 504].includes(response.status)) {
         onStatus?.("The document service is busy. Retrying automatically…");
         await new Promise((resolve) => setTimeout(resolve, 2000 * (attempt + 1)));

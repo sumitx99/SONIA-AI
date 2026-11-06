@@ -74,6 +74,22 @@ class ConversationTests(unittest.TestCase):
         self.assertEqual(error.exception.status_code, 403)
         self.pool.conn.fetchval.assert_not_called()
 
+    def test_pending_image_marker_is_saved_for_an_owned_document_only(self):
+        self.pool.conn.fetchval.return_value = self.now
+        message = {"id": "m1", "sender": "bot", "content": "Ready", "images_pending_document_id": 7}
+        with patch("app.api.conversations.owned_document_ids", AsyncMock(return_value=[7])) as owned:
+            asyncio.run(save_conversation("chat-1", ConversationInput(title="Saved", messages=[message]), "user-1"))
+        owned.assert_awaited_once_with("user-1", [7])
+        saved = json.loads(self.pool.conn.fetchval.call_args.args[4])
+        self.assertEqual(saved[0]["images_pending_document_id"], 7)
+        self.pool.conn.fetchval.reset_mock()
+        with patch("app.api.conversations.owned_document_ids", AsyncMock(return_value=[])):
+            with self.assertRaises(HTTPException) as error:
+                asyncio.run(save_conversation("chat-1", ConversationInput(
+                    title="Not mine", messages=[{**message, "images_pending_document_id": 999}]), "user-1"))
+        self.assertEqual(error.exception.status_code, 403)
+        self.pool.conn.fetchval.assert_not_called()
+
     def test_deleted_chat_rejects_late_autosave(self):
         self.pool.conn.fetchval.return_value = None
         with self.assertRaises(HTTPException) as error:

@@ -87,6 +87,11 @@ async def ensure_document_schema():
             ALTER TABLE documents ADD COLUMN IF NOT EXISTS user_id TEXT;
             ALTER TABLE documents ADD COLUMN IF NOT EXISTS upload_request_id TEXT;
             ALTER TABLE documents ADD COLUMN IF NOT EXISTS upload_response JSONB;
+            -- Refreshed while a server process works on the document; a stale value means
+            -- that process died (see discard_unfinished_upload and document_status).
+            ALTER TABLE documents ADD COLUMN IF NOT EXISTS upload_heartbeat_at TIMESTAMPTZ;
+            ALTER TABLE documents ADD COLUMN IF NOT EXISTS images_status TEXT;
+            ALTER TABLE documents ADD COLUMN IF NOT EXISTS images_stored INTEGER;
             CREATE UNIQUE INDEX IF NOT EXISTS documents_upload_request_idx
                 ON documents(user_id, upload_request_id) WHERE upload_request_id IS NOT NULL;
             CREATE INDEX IF NOT EXISTS documents_user_idx ON documents(user_id);
@@ -104,8 +109,8 @@ async def insert_file(filename, file_bytes, chat_id=None, user_id=None, request_
     await ensure_document_schema()
     async with (await get_pool()).acquire() as conn:
         return await conn.fetchval(
-            "INSERT INTO documents (filename, file, chat_id, user_id, upload_request_id) "
-            "VALUES ($1, $2, $3, $4, $5) RETURNING id", filename, file_bytes, chat_id, user_id, request_id)
+            "INSERT INTO documents (filename, file, chat_id, user_id, upload_request_id, upload_heartbeat_at) "
+            "VALUES ($1, $2, $3, $4, $5, now()) RETURNING id", filename, file_bytes, chat_id, user_id, request_id)
 
 
 async def completed_upload(user_id, request_id):
@@ -115,6 +120,49 @@ async def completed_upload(user_id, request_id):
     async with (await get_pool()).acquire() as conn:
         return await conn.fetchval("SELECT upload_response FROM documents "
                                    "WHERE user_id = $1 AND upload_request_id = $2", user_id, request_id)
+
+
+async def discard_unfinished_upload(user_id, request_id, stale_after_seconds):
+    """Delete this request's rows that never got a response and whose heartbeat stopped.
+
+    Returns their (id, chat_id). A row still being worked on (fresh heartbeat) is left alone, so
+    the caller's insert then conflicts with it. Chunks and image rows go with a deleted row
+    (ON DELETE CASCADE); R2 objects are the caller's to remove.
+    """
+    await ensure_document_schema()
+    async with (await get_pool()).acquire() as conn:
+        rows = await conn.fetch(
+            "DELETE FROM documents WHERE user_id = $1 AND upload_request_id = $2 AND upload_response IS NULL "
+            "AND (upload_heartbeat_at IS NULL OR upload_heartbeat_at < now() - make_interval(secs => $3)) "
+            "RETURNING id, chat_id", user_id, request_id, float(stale_after_seconds))
+    return [(row["id"], row["chat_id"]) for row in rows]
+
+
+async def touch_upload(document_id):
+    async with (await get_pool()).acquire() as conn:
+        await conn.execute("UPDATE documents SET upload_heartbeat_at = now() WHERE id = $1", document_id)
+
+
+async def set_images_status(document_id, status, stored=None):
+    async with (await get_pool()).acquire() as conn:
+        await conn.execute("UPDATE documents SET images_status = $2, images_stored = $3, "
+                           "upload_heartbeat_at = now() WHERE id = $1", document_id, status, stored)
+
+
+async def document_status(document_id, stale_after_seconds):
+    """Image processing state; work whose heartbeat stopped is marked failed (its process died)."""
+    await ensure_document_schema()
+    async with (await get_pool()).acquire() as conn:
+        row = await conn.fetchrow(
+            "UPDATE documents SET images_status = 'failed' WHERE id = $1 AND images_status = 'processing' "
+            "AND (upload_heartbeat_at IS NULL OR upload_heartbeat_at < now() - make_interval(secs => $2)) "
+            "RETURNING images_status, images_stored", document_id, float(stale_after_seconds))
+        if row is None:
+            row = await conn.fetchrow("SELECT images_status, images_stored FROM documents WHERE id = $1",
+                                      document_id)
+    if row is None:
+        return None
+    return {"images_status": row["images_status"], "images_stored": row["images_stored"] or 0}
 
 
 async def finish_upload(document_id, response):

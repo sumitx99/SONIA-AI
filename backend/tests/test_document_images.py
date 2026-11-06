@@ -2,7 +2,8 @@ import unittest
 
 import pymupdf
 
-from app.services.images.document_images import extract_document_images, requested_image_location, wants_images
+from app.services.images.document_images import (extract_document_images, render_document_images,
+                                                  requested_image_location, wants_images)
 
 
 def sample_pdf(repeated=False, rotation=0):
@@ -37,9 +38,17 @@ class ImageExtractionTests(unittest.TestCase):
         self.assertIn("worker processes the queue", image["text_after"])
         self.assertEqual(image["before_context"][-1]["page_number"], 1)
         self.assertEqual(image["after_context"][0]["page_number"], 1)
-        self.assertEqual((image["width"], image["height"]), (240, 160))
-        self.assertTrue(image["data"].startswith(b"\x89PNG"))
+        self.assertNotIn("data", image)
         self.assertIn("requests enter the API", image["search_text"])
+
+    def test_rendering_yields_each_visible_crop_as_png_with_its_size(self):
+        pdf = sample_pdf(repeated=True)
+        images = extract_document_images(pdf)
+        rendered = list(render_document_images(pdf, images))
+        self.assertEqual([image["image_id"] for image, _ in rendered], [image["image_id"] for image in images])
+        for image, data in rendered:
+            self.assertTrue(data.startswith(b"\x89PNG"))
+            self.assertEqual((image["width"], image["height"]), (240, 160))
 
     def test_repeated_asset_keeps_distinct_occurrences(self):
         first, second = extract_document_images(sample_pdf(repeated=True))
@@ -49,9 +58,11 @@ class ImageExtractionTests(unittest.TestCase):
         self.assertIn("After the second image", second["text_after"])
 
     def test_rotated_page_keeps_unrotated_location_and_visible_crop(self):
-        image = extract_document_images(sample_pdf(rotation=90))[0]
+        pdf = sample_pdf(rotation=90)
+        image = extract_document_images(pdf)[0]
         self.assertEqual(image["page_rotation"], 90)
         self.assertEqual(image["bbox"], [30.0, 120.0, 150.0, 200.0])
+        list(render_document_images(pdf, [image]))
         self.assertEqual((image["width"], image["height"]), (160, 240))
 
     def test_surrounding_text_can_cross_page_boundary_with_source_locations(self):

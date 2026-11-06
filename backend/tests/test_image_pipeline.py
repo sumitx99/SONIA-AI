@@ -36,25 +36,31 @@ class FakePool:
 class ImagePipelineTests(unittest.TestCase):
     def image(self):
         return {"image_id": "unique-image", "page_number": 2, "image_number": 1,
-                "data": b"png", "extension": "png", "content_type": "image/png",
+                "extension": "png", "content_type": "image/png",
                 "search_text": "API architecture before and after text"}
+
+    def rendered(self):
+        return patch("app.services.images.image_pipeline.render_document_images",
+                     side_effect=lambda pdf, images: ((image, b"png") for image in images))
 
     def test_ingestion_links_uploaded_key_to_searchable_metadata(self):
         storage = Mock()
         storage.upload.return_value = "documents/7/images/unique-image.png"
         image = self.image()
         with patch("app.services.images.image_pipeline.extract_document_images", return_value=[image]), \
-             patch("app.services.images.image_pipeline.get_embeddings_batch", return_value=[[0.1, 0.2]]) as embed, \
+             self.rendered(), patch("app.services.images.image_pipeline.get_embeddings_batch", return_value=[[0.1, 0.2]]) as embed, \
              patch("app.services.images.image_pipeline.save_document_images") as save:
             self.assertEqual(asyncio.run(ingest_document_images(7, b"pdf", "markdown", storage, "users/u/chats/c/documents/7")), 1)
             embed.assert_called_once_with([image["search_text"]])
             save.assert_called_once_with(7, [image], [[0.1, 0.2]])
             self.assertEqual(image["object_key"], storage.upload.return_value)
+            storage.upload.assert_called_once_with("users/u/chats/c/documents/7", image, b"png")
 
     def test_failed_database_write_cleans_up_uploaded_objects(self):
         storage = Mock()
         storage.upload.return_value = "uploaded-key"
         with patch("app.services.images.image_pipeline.extract_document_images", return_value=[self.image()]), \
+             self.rendered(), \
              patch("app.services.images.image_pipeline.get_embeddings_batch", return_value=[[0.1]]), \
              patch("app.services.images.image_pipeline.save_document_images", side_effect=RuntimeError("DB failed")):
             with self.assertRaises(RuntimeError):
@@ -68,6 +74,47 @@ class ImagePipelineTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 asyncio.run(ingest_document_images(7, b"pdf", "", storage, "users/u/chats/c/documents/7"))
         storage.upload.assert_not_called()
+
+    def test_images_are_uploaded_with_a_bounded_number_in_flight(self):
+        import threading, time
+        from app.services.images import image_pipeline
+        active, peak, lock = 0, 0, threading.Lock()
+
+        def upload(prefix, image, data):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+            time.sleep(0.01)
+            with lock:
+                active -= 1
+            return f"key-{image['image_id']}"
+
+        storage = Mock()
+        storage.upload.side_effect = upload
+        images = [{**self.image(), "image_id": f"image-{i}"} for i in range(12)]
+        with patch("app.services.images.image_pipeline.extract_document_images", return_value=images), \
+             self.rendered(), \
+             patch("app.services.images.image_pipeline.get_embeddings_batch", return_value=[[0.1]] * 12), \
+             patch("app.services.images.image_pipeline.save_document_images"):
+            self.assertEqual(asyncio.run(ingest_document_images(7, b"pdf", "", storage, "p")), 12)
+        self.assertEqual(storage.upload.call_count, 12)
+        self.assertLessEqual(peak, image_pipeline.UPLOADS_IN_FLIGHT)
+        self.assertEqual([image["object_key"] for image in images], [f"key-image-{i}" for i in range(12)])
+
+    def test_failed_upload_stops_rendering_and_removes_what_was_uploaded(self):
+        storage = Mock()
+        storage.upload.side_effect = [RuntimeError("R2 down")] + [f"key-{i}" for i in range(20)]
+        images = [{**self.image(), "image_id": f"image-{i}"} for i in range(20)]
+        with patch("app.services.images.image_pipeline.extract_document_images", return_value=images), \
+             self.rendered(), \
+             patch("app.services.images.image_pipeline.get_embeddings_batch", return_value=[[0.1]] * 20), \
+             patch("app.services.images.image_pipeline.save_document_images") as save:
+            with self.assertRaises(RuntimeError):
+                asyncio.run(ingest_document_images(7, b"pdf", "", storage, "p"))
+        save.assert_not_called()
+        self.assertLess(storage.upload.call_count, 20)
+        self.assertEqual(storage.delete.call_count, storage.upload.call_count - 1)
 
     def test_empty_document_scope_cannot_search_other_documents(self):
         with patch("app.services.images.image_db.get_pool") as image_pool, patch("app.core.db.get_pool") as text_pool:
@@ -143,7 +190,7 @@ class ImagePipelineTests(unittest.TestCase):
     def test_r2_upload_content_type_and_presigned_get(self):
         client = Mock()
         storage = R2ImageStorage(client, "private-bucket", 120)
-        key = storage.upload("chats/chat-1/documents/7", self.image())
+        key = storage.upload("chats/chat-1/documents/7", self.image(), b"png")
         self.assertEqual(key, "chats/chat-1/documents/7/images/unique-image.png")
         client.put_object.assert_called_once_with(Bucket="private-bucket", Key=key,
                                                    Body=b"png", ContentType="image/png")
@@ -171,6 +218,7 @@ class ImagePipelineTests(unittest.TestCase):
     def test_ingestion_uploads_images_under_the_chat_prefix(self):
         storage = Mock()
         with patch("app.services.images.image_pipeline.extract_document_images", return_value=[self.image()]), \
+             self.rendered(), \
              patch("app.services.images.image_pipeline.get_embeddings_batch", return_value=[[0.1]]), \
              patch("app.services.images.image_pipeline.save_document_images"):
             asyncio.run(ingest_document_images(7, b"pdf", "markdown", storage, "users/u/chats/chat-1/documents/7"))

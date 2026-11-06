@@ -31,7 +31,7 @@ import { DocumentImageGallery } from "@/components/chat/document-image";
 import { WebImageGallery } from "@/components/chat/web-images";
 import { MarkdownMessage } from "@/components/chat/markdown-message";
 import { ToolCalls, WebSources } from "@/components/chat/tool-calls";
-import { streamMessage, uploadPDF, deleteConversation, handleApiError, type ImageAttachment,
+import { streamMessage, uploadPDF, waitForDocumentImages, deleteConversation, handleApiError, type ImageAttachment,
   type ChatMessage as Message, type ToolCall } from "@/lib/api";
 import { conversationHistory, editConversation } from "@/lib/chat-context";
 import { supabase } from "@/lib/supabase";
@@ -43,6 +43,19 @@ const suggestions = [
   "What are the main takeaways?",
   "Explain the document in simple terms",
 ];
+
+/** The bot message announcing an uploaded document, for its current image state. */
+function uploadReadyMessage(filename: string,
+  images: { images_status?: string | null; images_stored?: number; warnings?: string[] }) {
+  const stored = images.images_stored ?? 0;
+  return {
+    content: `“${filename}” is ready.${images.images_status === "ready" ? ` ${stored} image${stored === 1 ? " is" : "s are"} available—ask to see an image or specify a page.` : ""} What would you like to discover?`,
+    notice: images.warnings?.join(" ") || (images.images_status === "disabled"
+      ? "Image extraction is unavailable until image storage is configured."
+      : images.images_status === "processing" ? "Images from this PDF are still being processed; you can already ask about its text."
+      : images.images_status === "failed" ? "Text is ready, but this document's images could not be processed." : null),
+  };
+}
 
 export default function SoniaChatInterface() {
   const router = useRouter();
@@ -111,6 +124,25 @@ export default function SoniaChatInterface() {
     textarea.current?.focus();
     return id;
   }
+
+  // Upload messages whose images are still processing: check until done, including after a reload.
+  const watchedImages = useRef(new Set<string>());
+  useEffect(() => {
+    if (!historyLoaded) return;
+    for (const chat of sessions) {
+      for (const pending of chat.messages) {
+        const documentId = pending.images_pending_document_id;
+        if (documentId == null || watchedImages.current.has(pending.id)) continue;
+        watchedImages.current.add(pending.id);
+        waitForDocumentImages(documentId).then((images) => setSessions((previous) => previous.map((session) => {
+          if (session.id !== chat.id) return session;
+          const filename = session.documents[session.documentIds.indexOf(documentId)] ?? "Your document";
+          return { ...session, messages: session.messages.map((message) => message.id === pending.id
+            ? { ...message, ...uploadReadyMessage(filename, images), images_pending_document_id: null } : message) };
+        }))).catch(() => watchedImages.current.delete(pending.id));
+      }
+    }
+  }, [sessions, historyLoaded, setSessions]);
 
   function append(id: string, message: Message) {
     setSessions((previous) =>
@@ -269,11 +301,9 @@ export default function SoniaChatInterface() {
         ),
       );
       append(id, {
-        id: crypto.randomUUID(),
-        content: `“${file.name}” is ready.${response.images_status === "ready" ? ` ${response.images_stored ?? 0} image${response.images_stored === 1 ? " is" : "s are"} available—ask to see an image or specify a page.` : ""} What would you like to discover?`,
-        sender: "bot",
-        notice: response.warnings?.join(" ") || (response.images_status === "disabled"
-          ? "Image extraction is unavailable until image storage is configured." : null),
+        id: crypto.randomUUID(), sender: "bot", ...uploadReadyMessage(response.filename || file.name, response),
+        // The effect that watches pending images picks this up, now and after a reload.
+        images_pending_document_id: response.images_status === "processing" ? response.file_id : null,
       });
     } catch (error) {
       append(id, {

@@ -2,6 +2,7 @@
 
 import re
 import unicodedata
+from collections.abc import Iterator
 from uuid import uuid4
 
 import pymupdf
@@ -51,12 +52,8 @@ def extract_document_images(pdf_bytes: bytes, markdown: str = "") -> list[dict]:
                     events.append({"kind": "text", "text": text, **location})
                 elif block["type"] == 1 and block.get("image"):
                     image_number += 1
-                    # Render the exact visible region, preserving transparency and
-                    # masks without returning a raw image's hidden background.
-                    clip = pymupdf.Rect(block["bbox"]) * page.rotation_matrix
-                    # Bound raster memory on small servers, even for poster-sized PDFs.
-                    scale = min(2.0, 1600 / max(clip.width, clip.height, 1))
-                    pixmap = page.get_pixmap(clip=clip, matrix=pymupdf.Matrix(scale, scale), alpha=False)
+                    # Pixels are rendered later, one image at a time (render_document_images),
+                    # so a scanned PDF never holds every page's raster in memory at once.
                     events.append({
                         "kind": "image", "image_id": str(uuid4()),
                         "image_number": image_number, **location,
@@ -65,9 +62,7 @@ def extract_document_images(pdf_bytes: bytes, markdown: str = "") -> list[dict]:
                         "page_rotation": page.rotation,
                         "coordinate_system": "unrotated_page_points",
                         "context_order": "geometric",
-                        "data": pixmap.tobytes("png"),
                         "content_type": "image/png", "extension": "png",
-                        "width": pixmap.width, "height": pixmap.height,
                     })
 
     images = []
@@ -96,7 +91,29 @@ def extract_document_images(pdf_bytes: bytes, markdown: str = "") -> list[dict]:
     return images
 
 
-_IMAGE_WORDS = r"image|images|img|figure|figures|fig|diagram|diagrams|photo|photos|picture|pictures|screenshot|screenshots|illustration|illustrations|चित्र|तस्वीर|फोटो|डायग्राम|इमेज"
+def render_document_images(pdf_bytes: bytes, images: list[dict]) -> Iterator[tuple[dict, bytes]]:
+    """Yield (image, PNG bytes) one at a time, setting each image's width and height.
+
+    Each PNG is the exact visible region of the occurrence (transparency and masks applied,
+    no hidden background). Callers should let each PNG go before taking the next.
+    """
+    with pymupdf.open(stream=pdf_bytes, filetype="pdf") as document:
+        for image in images:
+            page = document[image["page_number"] - 1]
+            clip = pymupdf.Rect(image["bbox"]) * page.rotation_matrix
+            # Bound raster memory on small servers, even for poster-sized PDFs.
+            scale = min(2.0, 1600 / max(clip.width, clip.height, 1))
+            pixmap = page.get_pixmap(clip=clip, matrix=pymupdf.Matrix(scale, scale), alpha=False)
+            image["width"], image["height"] = pixmap.width, pixmap.height
+            data = pixmap.tobytes("png")
+            del pixmap
+            # MuPDF caches each decoded source image (a scanned page is often 30+ MB raw) and
+            # never reuses it for the next occurrence's page; empty the cache so memory stays flat.
+            pymupdf.TOOLS.store_shrink(100)
+            yield image, data
+
+
+_IMAGE_WORDS =r"image|images|img|figure|figures|fig|diagram|diagrams|photo|photos|picture|pictures|screenshot|screenshots|illustration|illustrations|चित्र|तस्वीर|फोटो|डायग्राम|इमेज"
 
 
 def wants_images(query: str) -> bool:

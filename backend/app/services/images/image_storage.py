@@ -61,9 +61,12 @@ class R2ImageStorage:
                                ContentType="application/pdf")
         return key
 
-    def upload(self, prefix: str, image: dict) -> str:
+    def download_pdf(self, key: str) -> bytes:
+        return self.client.get_object(Bucket=self.bucket, Key=key)["Body"].read()
+
+    def upload(self, prefix: str, image: dict, data: bytes) -> str:
         key = f"{prefix}/images/{image['image_id']}.{image['extension']}"
-        self.client.put_object(Bucket=self.bucket, Key=key, Body=image["data"],
+        self.client.put_object(Bucket=self.bucket, Key=key, Body=data,
                                ContentType=image["content_type"])
         return key
 

@@ -3,13 +3,15 @@
 import asyncio
 import logging
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
-from app.services.images.document_images import extract_document_images
+from app.services.images.document_images import extract_document_images, render_document_images
 from app.services.embeddings import get_embeddings_batch
 from app.services.images.image_db import save_document_images
 
 logger = logging.getLogger(__name__)
+UPLOADS_IN_FLIGHT = 4
 
 
 async def ingest_document_images(document_id, pdf_bytes, markdown, storage, prefix):
@@ -22,16 +24,29 @@ async def ingest_document_images(document_id, pdf_bytes, markdown, storage, pref
         raise ValueError("Image embedding count does not match extracted image count")
     uploaded = []
 
-    def upload(image):
-        key = storage.upload(prefix, image)
+    def upload(image, data):
+        key = storage.upload(prefix, image, data)
         uploaded.append(key)  # list.append is thread-safe
         image["object_key"] = key
 
     def upload_all():
-        # Each upload is a network round trip to R2; send them concurrently.
-        with ThreadPoolExecutor(max_workers=min(8, len(images))) as pool:
-            for result in [pool.submit(upload, image) for image in images]:
-                result.result()
+        # Render on this thread (a PyMuPDF document is not thread-safe) and send to R2 from a
+        # small pool. The semaphore caps how many PNGs exist at once, so memory stays flat
+        # however many pages a scanned PDF has.
+        in_flight = threading.BoundedSemaphore(UPLOADS_IN_FLIGHT)
+        futures = []
+        with ThreadPoolExecutor(max_workers=UPLOADS_IN_FLIGHT) as pool:
+            for image, data in render_document_images(pdf_bytes, images):
+                in_flight.acquire()
+                if any(future.done() and future.exception() for future in futures):
+                    in_flight.release()
+                    break
+                future = pool.submit(upload, image, data)
+                future.add_done_callback(lambda _: in_flight.release())
+                futures.append(future)
+                del data
+        for future in futures:
+            future.result()
 
     def clean_up():
         for key in uploaded:

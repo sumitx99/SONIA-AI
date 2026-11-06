@@ -94,6 +94,9 @@ class SavedMessage(BaseModel):
     tool_calls: list[SavedToolCall] = Field(default_factory=list, max_length=30)
     sources: list[SavedSource] = Field(default_factory=list, max_length=10)
     citations: list[SavedCitation] = Field(default_factory=list, max_length=40)
+    # Set on an upload's "ready" message while that document's images are still being processed,
+    # so the chat can resume checking their status after a reload.
+    images_pending_document_id: int | None = None
 
 
 class ConversationInput(BaseModel):
@@ -158,6 +161,8 @@ async def save_conversation(chat_id: str, payload: ConversationInput, user_id: s
     if not valid_chat_id(chat_id):
         raise HTTPException(422, "Invalid conversation ID")
     image_documents = {image.document_id for message in payload.messages for image in message.images}
+    image_documents |= {message.images_pending_document_id for message in payload.messages
+                        if message.images_pending_document_id is not None}
     if image_documents and set(await owned_document_ids(user_id, list(image_documents))) != image_documents:
         raise HTTPException(403, "An image belongs to a document outside your account")
     web_refs = {image.image_id for message in payload.messages for image in message.web_images}

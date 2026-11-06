@@ -1,5 +1,6 @@
 """API contract tests; parsing, model calls, DB and R2 are external-service fakes."""
 
+import asyncio
 import importlib
 import json
 import sys
@@ -52,9 +53,17 @@ class ImageAPITests(unittest.TestCase):
             owned.start()
             self.addCleanup(owned.stop)
         self.client = TestClient(main.app)
-        finish = patch.object(documents_api, "finish_upload")
-        finish.start()
-        self.addCleanup(finish.stop)
+        # backend/.env points at a real database: no test may reach it.
+        for module in ("app.core.db", "app.api.conversations", "app.api.profiles", "app.mcp_client.store",
+                       "app.services.images.image_db", "app.services.images.web_images"):
+            guard = patch(f"{module}.get_pool", AsyncMock(side_effect=AssertionError("Database access in a test")))
+            guard.start()
+            self.addCleanup(guard.stop)
+        for name, value in (("finish_upload", None), ("set_images_status", None), ("touch_upload", None),
+                            ("document_status", None), ("discard_unfinished_upload", [])):
+            fake = patch.object(documents_api, name, AsyncMock(return_value=value))
+            setattr(self, name, fake.start())
+            self.addCleanup(fake.stop)
         self.image = {"image_id": "image-1", "document_id": 7, "page_number": 12,
                       "image_number": 2, "object_key": "private-image-key",
                       "search_text": "API architecture", "heading_path": ["Architecture"],
@@ -285,9 +294,8 @@ class ImageAPITests(unittest.TestCase):
             search.assert_called_once_with(document_ids=[7], page_number=12, image_number=2, limit=25)
             self.assertEqual(self.client.get("/documents/7/images?page_number=0").status_code, 422)
 
-    def test_pdf_upload_runs_real_extraction_and_returns_image_count(self):
+    def test_upload_answers_once_text_is_ready_and_queues_images(self):
         prefix = "users/user-1/chats/chat-1/documents/7"
-        self.storage.upload.return_value = f"{prefix}/images/stored.png"
         self.storage.upload_pdf.return_value = f"{prefix}/source.pdf"
         pdf = sample_pdf()
         with patch.object(documents_api, "insert_file", return_value=7) as insert, \
@@ -296,21 +304,76 @@ class ImageAPITests(unittest.TestCase):
              patch.object(documents_api, "process_pdf_with_docling", return_value="# System Guide\nAPI text."), \
              patch.object(documents_api, "get_embeddings_batch", side_effect=lambda texts: [[0.1] for _ in texts]), \
              patch.object(documents_api.R2ImageStorage, "from_env", return_value=self.storage), \
-             patch("app.services.images.image_pipeline.get_embeddings_batch", side_effect=lambda texts: [[0.1] for _ in texts]), \
-             patch("app.services.images.image_pipeline.save_document_images") as save:
+             patch.object(documents_api, "_start_image_job") as start_images:
             response = self.client.post("/upload", data={"chat_id": "chat-1"},
                                         files={"file": ("guide.pdf", pdf, "application/pdf")})
         self.assertEqual(response.status_code, 200, response.text)
         insert.assert_called_once_with("guide.pdf", None, "chat-1", "user-1", None)
         self.storage.upload_pdf.assert_called_once_with(prefix, pdf)
         set_key.assert_called_once_with(7, f"{prefix}/source.pdf")
+        self.assertEqual(response.json()["images_status"], "processing")
+        self.assertEqual(response.json()["images_stored"], 0)
+        self.set_images_status.assert_awaited_with(7, "processing")
+        start_images.assert_called_once_with(7, f"{prefix}/source.pdf", "# System Guide\nAPI text.",
+                                             self.storage, prefix)
+        self.storage.upload.assert_not_called()
+
+    def test_upload_without_image_storage_reports_images_disabled(self):
+        with patch.object(documents_api, "insert_file", return_value=7), \
+             patch.object(documents_api, "insert_embeddings"), \
+             patch.object(documents_api, "process_pdf_with_docling", return_value="Text"), \
+             patch.object(documents_api, "get_embeddings_batch", return_value=[[0.1]]), \
+             patch.object(documents_api.R2ImageStorage, "from_env", return_value=None), \
+             patch.object(documents_api, "_start_image_job") as start_images:
+            response = self.client.post("/upload", files={"file": ("guide.pdf", sample_pdf(), "application/pdf")})
+        self.assertEqual(response.json()["images_status"], "disabled")
+        start_images.assert_not_called()
+
+    def test_image_job_runs_real_extraction_and_records_the_count(self):
+        prefix = "users/user-1/chats/chat-1/documents/7"
+        self.storage.upload.return_value = f"{prefix}/images/stored.png"
+        self.storage.download_pdf.return_value = sample_pdf()
+        with patch("app.services.images.image_pipeline.get_embeddings_batch", side_effect=lambda texts: [[0.1] for _ in texts]), \
+             patch("app.services.images.image_pipeline.save_document_images") as save:
+            asyncio.run(documents_api._process_images(7, f"{prefix}/source.pdf", "# System Guide\nAPI text.",
+                                                      self.storage, prefix))
+        self.storage.download_pdf.assert_called_once_with(f"{prefix}/source.pdf")
         self.assertEqual(self.storage.upload.call_args.args[0], prefix)
-        self.assertEqual(response.json()["images_stored"], 1)
-        self.assertEqual(response.json()["images_status"], "ready")
+        self.set_images_status.assert_awaited_with(7, "ready", 1)
         image = save.call_args.args[1][0]
         self.assertIn("requests enter the API", image["text_before"])
         self.assertIn("worker processes the queue", image["text_after"])
 
+    def test_failed_image_job_records_failure_and_keeps_the_document(self):
+        self.storage.download_pdf.side_effect = RuntimeError("R2 down")
+        with patch.object(documents_api, "delete_document") as delete, \
+             self.assertLogs("app.api.documents", level="ERROR"):
+            asyncio.run(documents_api._process_images(7, "key", "text", self.storage, "prefix"))
+        self.set_images_status.assert_awaited_with(7, "failed")
+        delete.assert_not_called()
+
+    def test_heartbeat_is_refreshed_while_work_runs_and_stops_after(self):
+        async def work():
+            async with documents_api._heartbeat(7):
+                await asyncio.sleep(0.05)
+            await asyncio.sleep(0.03)
+        with patch.object(documents_api, "HEARTBEAT_SECONDS", 0.01):
+            asyncio.run(work())
+        beats = self.touch_upload.await_count
+        self.assertGreaterEqual(beats, 2)
+        self.assertLessEqual(beats, 6)
+
+    def test_status_reports_images_and_explains_a_failure(self):
+        self.document_status.return_value = {"images_status": "processing", "images_stored": 0}
+        self.assertEqual(self.client.get("/documents/7/status").json(),
+                         {"images_status": "processing", "images_stored": 0})
+        self.document_status.assert_awaited_with(7, documents_api.STALE_AFTER_SECONDS)
+        self.document_status.return_value = {"images_status": "failed", "images_stored": 0}
+        self.assertIn("could not be processed", self.client.get("/documents/7/status").json()["warnings"][0])
+
+    def test_status_of_another_users_document_is_not_found(self):
+        self.assertEqual(self.client.get("/documents/8/status").status_code, 404)
+        self.document_status.assert_not_awaited()
 
 if __name__ == "__main__":
     unittest.main()
