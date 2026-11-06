@@ -16,7 +16,7 @@ from app.services.context import answer_context
 from app.services.chat_memory import parse_history
 from app.services.answer_verification import check_citations
 from app.services.llm import (NO_ANSWER, BackupUnavailable, backup_configured, gemini_unavailable,
-                              stream_backup_answer, WebSearchUnavailable)
+                              stream_backup_answer, ToolSelectionUnavailable, WebSearchUnavailable)
 from app.services.web_activity import requested_urls
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,8 @@ async def chat(query: str = Form(...), document_ids: list[int] | None = Form(Non
 
 
 def _failure_message(error: Exception) -> str:
+    if isinstance(error, ToolSelectionUnavailable):
+        return "Sonia couldn’t select the connected tools for this request. Please retry your question."
     if isinstance(error, WebSearchUnavailable):
         return "Web search could not be completed right now. Please try again later; current information could not be verified."
     if isinstance(error, BackupUnavailable) or gemini_unavailable(error):
