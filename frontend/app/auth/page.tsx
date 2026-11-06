@@ -7,6 +7,7 @@ import { ArrowLeft, ArrowUpRight, Eye, EyeOff } from "lucide-react";
 import { Brand, Emblem } from "@/components/brand";
 import { Reveal } from "@/components/reveal";
 import { safeNext, supabase, supabaseConfigured } from "@/lib/supabase";
+import { sessionExpired } from "@/lib/session-lifetime";
 
 type Mode = "signin" | "signup" | "forgot" | "reset";
 
@@ -57,7 +58,7 @@ export default function AuthPage() {
     });
     supabase.auth.getSession().then(({ data: { session } }) => {
       const recovering = window.location.hash.includes("type=recovery");
-      if (session && !recovering) router.replace(destination);
+      if (session && !recovering && !sessionExpired(session.access_token)) router.replace(destination);
     });
     return () => data.subscription.unsubscribe();
   }, [router]);

@@ -5,6 +5,7 @@ import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import { Analytics } from "@vercel/analytics/next";
 import { Suspense } from "react";
+import { SessionLifetime } from "@/components/session-lifetime";
 import "./styles/globals.css";
 import "./styles/identity.css";
 import "./styles/account-menu.css";
@@ -47,6 +48,7 @@ export default function RootLayout({
       <body
         className={`font-sans ${GeistSans.variable} ${GeistMono.variable} ${editorialSerif.variable}`}
       >
+        <SessionLifetime />
         <Suspense fallback={null}>{children}</Suspense>
         <Analytics />
       </body>

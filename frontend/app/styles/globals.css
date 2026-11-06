@@ -918,6 +918,8 @@ h2 {
 }
 .session-edit {
   display: flex;
+  width: 100%;
+  min-width: 0;
   gap: 2px;
   align-items: center;
   padding: 7px;
@@ -927,6 +929,8 @@ h2 {
   width: 100%;
   padding: 6px;
   background: var(--paper);
+  color: var(--ink);
+  caret-color: var(--ink);
   border: 1px solid var(--line);
   border-radius: 2px;
   font-size: 11px;
@@ -1399,19 +1403,6 @@ h2 {
   background: var(--orange);
   color: #fffaf1;
 }
-.resume-answer-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 10px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--ink);
-  font-size: 11px;
-}
-.resume-answer-button:hover:not(:disabled) { background: var(--paper); }
-.resume-answer-button:focus-visible { outline: 2px solid var(--orange); outline-offset: 3px; }
 .composer-disclaimer {
   color: #777767;
   text-align: center;
@@ -1495,6 +1486,7 @@ h2 {
   gap: 40px;
 }
 .account-card {
+  width: 100%;
   max-width: 400px;
   margin: auto;
   padding-block: 30px;

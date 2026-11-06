@@ -22,7 +22,6 @@ import {
   Pencil,
   Plus,
   Play,
-  Square,
   Trash2,
   X,
 } from "lucide-react";
@@ -77,6 +76,9 @@ export default function SoniaChatInterface() {
   const current = sessions.find((session) => session.id === currentId);
   const messages = current?.messages ?? [];
   const answeringHere = !!generatingId && generatingId === currentId;
+  const canResume = !!stopped && stopped.id === currentId && !input.trim() && !generatingId;
+  const composerAction = answeringHere ? "stop" : canResume ? "resume" : "send";
+  const composerActionLabel = answeringHere ? "Stop answering" : canResume ? "Resume answer" : "Send message";
   const toolStepCount = messages[messages.length - 1]?.tool_calls?.length ?? 0;
 
   useEffect(() => { setCurrentId(null); setDeleteTarget(null); setStopped(null); return () => answerController.current?.abort(); }, [session?.user.id]);
@@ -329,7 +331,7 @@ export default function SoniaChatInterface() {
       !event.nativeEvent.isComposing
     ) {
       event.preventDefault();
-      void ask();
+      void ask(undefined, canResume);
     }
   }
 
@@ -610,7 +612,7 @@ export default function SoniaChatInterface() {
               className="chat-composer"
               onSubmit={(event) => {
                 event.preventDefault();
-                void ask();
+                void ask(undefined, canResume);
               }}
             >
               <label className="sr-only" htmlFor="question">
@@ -636,17 +638,17 @@ export default function SoniaChatInterface() {
                   <Paperclip size={16} />
                   <span>Add a PDF</span>
                 </button>
-                <span className="composer-hint mono">{answeringHere ? "ANSWERING…" : pending?.kind === "upload" ? "UPLOADING PDF…" : "ENTER TO SEND"}</span>
-                {stopped?.id === currentId && !generatingId && <button type="button" className="resume-answer-button" disabled={!!pending || !historyLoaded} onClick={() => void ask(undefined, true)}><Play size={14} />Resume</button>}
+                <span className="composer-hint mono">{answeringHere ? "ANSWERING…" : pending?.kind === "upload" ? "UPLOADING PDF…" : canResume ? "ENTER TO RESUME" : "ENTER TO SEND"}</span>
                 <button
                   className="send-button"
+                  data-action={composerAction}
                   type={answeringHere ? "button" : "submit"}
-                  aria-label={answeringHere ? "Stop answering" : "Send message"}
-                  title={answeringHere ? "Stop answering" : "Send message"}
+                  aria-label={composerActionLabel}
                   onClick={answeringHere ? () => answerController.current?.abort() : undefined}
-                  disabled={!answeringHere && (!input.trim() || !!pending || !!generatingId || !historyLoaded)}
+                  disabled={!answeringHere && ((!input.trim() && !canResume) || !!pending || !!generatingId || !historyLoaded)}
                 >
-                  {answeringHere ? <Square size={16} fill="currentColor" /> : <ArrowUp size={20} />}
+                  {answeringHere ? <span className="composer-stop-mark" aria-hidden="true" /> : canResume ? <Play size={16} fill="currentColor" aria-hidden="true" /> : <ArrowUp size={20} aria-hidden="true" />}
+                  <span className="composer-action-tooltip" aria-hidden="true">{composerActionLabel}</span>
                 </button>
               </div>
             </form>

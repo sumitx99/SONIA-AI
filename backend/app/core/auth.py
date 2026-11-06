@@ -1,12 +1,15 @@
 """Supabase Auth: every API request carries the user's access token as a Bearer header."""
 
 import os
+import time
+import math
 from functools import lru_cache
 
 import jwt
 from fastapi import Header, HTTPException
 
 AUDIENCE = "authenticated"
+SESSION_LIFETIME_SECONDS = 8 * 60 * 60
 
 
 @lru_cache(maxsize=1)
@@ -42,6 +45,15 @@ def verify_claims(token: str) -> dict:
                             issuer=supabase_issuer())
     if not claims.get("sub"):
         raise jwt.InvalidTokenError("Token has no subject")
+    # AMR timestamps belong to the authentication, so token refresh cannot extend login.
+    amr = claims.get("amr")
+    times = [claims.get("auth_time"), *[
+        entry.get("timestamp") for entry in (amr if isinstance(amr, list) else [])
+        if isinstance(entry, dict)
+    ]]
+    times = [value for value in times if type(value) in (int, float) and math.isfinite(value) and value > 0]
+    if not times or time.time() >= min(times) + SESSION_LIFETIME_SECONDS:
+        raise jwt.ExpiredSignatureError("The 8-hour session has ended")
     return claims
 
 
