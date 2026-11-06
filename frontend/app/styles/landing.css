@@ -808,7 +808,7 @@
 }
 
 /* The landing demo cycles through four illustrative product capabilities. */
-.demo-feature-tabs { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:24px; }
+.demo-feature-tabs { display:flex; flex-wrap:wrap; justify-content:center; gap:6px; margin-bottom:24px; }
 .demo-feature-tabs button { display:inline-flex; align-items:center; gap:7px; padding:9px 12px; border:1px solid #deded7; border-radius:6px; background:transparent; color:#76766d; font-size:11px; }
 .demo-feature-tabs button[aria-pressed="true"] { background:#222; border-color:#222; color:#fff; }
 .demo-feature-tabs button:focus-visible, .demo-playback button:focus-visible { outline:2px solid var(--orange); outline-offset:3px; }
