@@ -7,7 +7,11 @@ export function publicToolCalls(calls: ToolCall[] = []): ToolCall[] {
     if (["web-backup", "web-search-unavailable"].includes(call.id)) return [];
     const reading = call.tool === "url_context" || call.tool === "read_web_page";
     const images = call.tool === "image_search" || call.tool === "google_search_images";
-    const title = call.status === "running" ? (images ? "Searching web images" : reading ? "Reading web pages" : "Searching the web")
+    const activity = images ? "Web image search" : reading ? "Web page reading" : "Web search";
+    const title = call.status === "stopped" ? `${activity} stopped`
+      : call.status === "denied" ? `${activity} declined`
+      : call.status === "awaiting_approval" ? `${activity} awaiting approval`
+      : call.status === "running" ? (images ? "Searching web images" : reading ? "Reading web pages" : "Searching the web")
       : call.status === "error" ? (images ? "Web images unavailable" : reading ? "Page could not be read" : "Web search unavailable")
       : (images ? "Web image search complete" : reading ? "Web pages read" : "Web search complete");
     const summary = call.status === "error" ? "This request could not be completed. Please try again later."

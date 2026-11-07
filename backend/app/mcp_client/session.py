@@ -12,9 +12,10 @@ from mcp.shared._httpx_utils import create_mcp_http_client
 import mcp.types as types
 
 from app.mcp_client.safety import UnsafeURLError, assert_public_url
+from app.services.tool_evidence import bounded_tool_text
 
 CONNECT_TIMEOUT = 20
-CALL_TIMEOUT = 30
+CALL_TIMEOUT = 180
 MAX_RESULT_CHARS = 8000
 MAX_TOOLS = 40
 CLIENT_INFO = types.Implementation(name="Sonia", version="1.0")
@@ -100,11 +101,20 @@ def result_text(result) -> tuple[str, bool]:
         else:
             parts.append(f"[{getattr(block, 'type', 'content')} omitted]")
     structured = getattr(result, "structured_content", None)
-    if structured and not parts:
-        parts.append(json.dumps(structured, ensure_ascii=False))
-    text = "\n".join(parts) or "(no content)"
-    if len(text) > MAX_RESULT_CHARS:
-        text = text[:MAX_RESULT_CHARS] + "\n…[truncated]"
+    # MCP may return a human summary alongside machine-readable data. Use the data
+    # as the single citation source rather than silently dropping it or duplicating it.
+    if structured is not None:
+        value = structured
+    elif len(parts) > 1:
+        value = []
+        for part in parts:
+            try:
+                value.append(json.loads(part))
+            except (ValueError, RecursionError):
+                value.append(part)
+    else:
+        value = parts[0] if parts else "(no content)"
+    text = bounded_tool_text(value, MAX_RESULT_CHARS)
     return text, bool(getattr(result, "is_error", False))
 
 

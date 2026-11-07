@@ -56,7 +56,7 @@ class SavedToolCall(BaseModel):
     server: str = Field(max_length=100)
     tool: str = Field(max_length=200)
     title: str = Field("", max_length=200)
-    status: Literal["awaiting_approval", "running", "done", "error", "denied"]
+    status: Literal["awaiting_approval", "running", "done", "error", "denied", "stopped"]
     summary: str | None = Field(None, max_length=500)
 
 

@@ -2,15 +2,17 @@
 
 import { useState } from "react";
 import { publicToolCalls } from "@/lib/web-activity";
-import { AlertTriangle, Ban, Check, Globe, Hand, Loader2, Wrench } from "lucide-react";
+import { AlertTriangle, Ban, Check, ChevronDown, Globe, Hand, Loader2, Square } from "lucide-react";
 import { decideToolCall, handleApiError, type ToolCall, type WebSource } from "@/lib/api";
+import styles from "./tool-activity.module.css";
 
 const STATUS: Record<ToolCall["status"], { label: string; Icon: typeof Check }> = {
   awaiting_approval: { label: "Waiting for you", Icon: Hand },
-  running: { label: "Running", Icon: Loader2 },
-  done: { label: "Done", Icon: Check },
+  running: { label: "In progress", Icon: Loader2 },
+  done: { label: "Complete", Icon: Check },
   error: { label: "Failed", Icon: AlertTriangle },
   denied: { label: "Declined", Icon: Ban },
+  stopped: { label: "Stopped", Icon: Square },
 };
 
 function ApprovalCard({ call }: { call: ToolCall }) {
@@ -59,32 +61,44 @@ function ApprovalCard({ call }: { call: ToolCall }) {
 }
 
 /** The tools Sonia used for an answer, and approval prompts for ones that need consent. */
-export function ToolCalls({ calls: rawCalls }: { calls?: ToolCall[] }) {
+export function ToolCalls({ calls: rawCalls, streaming = false }: { calls?: ToolCall[]; streaming?: boolean }) {
   const calls = publicToolCalls(rawCalls);
   if (!calls.length) return null;
+  const preparing = streaming && calls.every(call => call.status !== "running" && call.status !== "awaiting_approval");
   return (
-    <div className="tool-calls" aria-label="Tools used for this answer" aria-live="polite" aria-relevant="additions text">
-      {calls.map((call) =>
-        call.status === "awaiting_approval" ? <ApprovalCard key={call.id} call={call} /> : (
-          <details key={call.id} className={`tool-chip is-${call.status} ${call.server === "Web" ? "is-web" : ""}`}>
-            <summary>
-              {call.server === "Web" ? <Globe size={13} aria-hidden /> : <Wrench size={12} aria-hidden />}
-              <span className="tool-chip-name">{call.server === "Web" ? call.title : `MCP · ${call.server} › ${call.title}`}</span>
-              <span className="tool-chip-status">
-                {(() => { const { Icon, label } = STATUS[call.status]; return <><Icon size={12}
-                  className={call.status === "running" ? "animate-spin" : undefined} aria-hidden />{label}</>; })()}
-              </span>
-            </summary>
-            {call.arguments && Object.keys(call.arguments).length > 0 && (
-              call.server === "Web" ? <div className="tool-chip-detail web-step-detail">
-                <span>{["url_context", "read_web_page"].includes(call.tool) ? "Pages" : "Search queries"}</span>
-                {Object.values(call.arguments).flat().filter((value): value is string => typeof value === "string").map((value, index) => <p key={index}>{value}</p>)}
-              </div> : <pre className="tool-chip-detail">{JSON.stringify(call.arguments, null, 2)}</pre>
-            )}
-            {call.summary && <p className="tool-chip-detail">{call.summary}</p>}
-          </details>
-        ))}
-    </div>
+    <section className={styles.activity} aria-label="Answer activity" aria-live="polite" aria-relevant="additions text">
+      <p className={styles.heading}>Activity</p>
+      <ol className={styles.steps}>
+        {calls.map(call => {
+          const { Icon, label } = STATUS[call.status];
+          const title = call.title.replace(/[_-]+/g, " ").replace(/([a-z0-9])([A-Z])/g, "$1 $2");
+          const hasArguments = call.arguments && Object.keys(call.arguments).length > 0;
+          return <li key={call.id} className={styles.step} data-status={call.status}>
+            <span className={styles.marker}><Icon size={13} className={call.status === "running" ? "animate-spin" : undefined} aria-hidden /></span>
+            <div className={styles.content}>
+              <div className={styles.row}>
+                <span className={styles.title}>{call.server !== "Web" && call.status === "running" ? "Using " : ""}{title}</span>
+                <span className={styles.status}>{label}</span>
+              </div>
+              {call.server !== "Web" && <p className={styles.provider}>{call.server}</p>}
+              {call.status === "awaiting_approval" ? <ApprovalCard call={call} /> : (hasArguments || call.summary) && (
+                <details className={styles.details}>
+                  <summary>Details <ChevronDown size={12} aria-hidden /></summary>
+                  {hasArguments && (call.server === "Web"
+                    ? <div className={styles.raw}>{Object.values(call.arguments!).flat().filter((value): value is string => typeof value === "string").map((value, index) => <p key={index}>{value}</p>)}</div>
+                    : <pre className={styles.raw}>{JSON.stringify(call.arguments, null, 2)}</pre>)}
+                  {call.summary && <p className={styles.raw}>{call.summary}</p>}
+                </details>
+              )}
+            </div>
+          </li>;
+        })}
+        {preparing && <li className={styles.step} data-status="running">
+          <span className={styles.marker}><Loader2 size={13} className="animate-spin" aria-hidden /></span>
+          <span className={styles.title}>Preparing answer…</span>
+        </li>}
+      </ol>
+    </section>
   );
 }
 

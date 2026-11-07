@@ -112,6 +112,29 @@ ANSWER = [{"text": "Done."}]
 
 
 class ToolLoopTests(unittest.TestCase):
+    def test_structured_tool_excerpts_and_verifier_share_the_same_source(self):
+        from app.services.answer_verification import check_citations
+
+        title = "Senior Software Engineer – MERN Stack"
+        result = json.dumps({"jobs": [{"title": title, "company": "Walkwel Technology"}]})
+        declarations, tools = registry("allow")
+        fake, seen = gemini_rounds(CALL, ANSWER)
+
+        async def main():
+            return [event async for event in agent.answer_with_tools("user-1", "Find jobs", "", declarations, tools)]
+
+        with patch.object(agent, "stream_gemini_parts", fake), \
+             patch.object(agent, "_run_tool", AsyncMock(return_value=(result, False))):
+            events = asyncio.run(main())
+        reply = seen[1][0][2]["parts"][0]["functionResponse"]["response"]
+        self.assertEqual(reply["result"], result)
+        self.assertNotIn("citation_excerpts", reply)
+        evidence = [source for kind, data in events if kind == "evidence" for source in data["sources"]]
+        self.assertEqual(evidence[0]["id"], reply["source_id"])
+        answer = 'Role [1].\n```citations\n' + json.dumps([
+            {"n": 1, "source": reply["source_id"], "quote": title}]) + '\n```'
+        self.assertTrue(check_citations(answer, "", [], evidence)[1][0]["verified"])
+
     def collect(self, policy, decide=None, user="user-1"):
         declarations, tools = registry(policy)
         fake, seen = gemini_rounds(CALL, ANSWER)

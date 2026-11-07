@@ -37,7 +37,8 @@ function themedLayout(spec: ChartSpec, font: string) {
     paper_bgcolor: "rgba(0,0,0,0)",
     plot_bgcolor: "rgba(0,0,0,0)",
     margin: { t: 12, r: 16, b: 16, l: 16 },
-    hoverlabel: { font: { family: font, size: 12 }, bgcolor: INK, bordercolor: INK },
+    // Hover text otherwise inherits the dark plot font and disappears on this background.
+    hoverlabel: { font: { family: font, size: 12, color: "#ffffff" }, bgcolor: INK, bordercolor: INK },
     legend: { orientation: "h", x: 0, y: -0.18, font: { color: MUTED }, ...(isObject(rest.legend) ? rest.legend : {}) },
     xaxis: axis(xaxis),
     yaxis: axis(yaxis),

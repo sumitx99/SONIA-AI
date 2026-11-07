@@ -12,6 +12,14 @@ from test_image_pipeline import FakePool
 
 
 class ConversationTests(unittest.TestCase):
+    def test_stopped_tool_activity_survives_saved_message_validation(self):
+        chat = ConversationInput(title="Stopped answer", messages=[{
+            "id": "answer-1", "sender": "bot", "content": "Partial answer",
+            "tool_calls": [{"id": "jobs-1", "server": "JSearch Jobs", "tool": "Job_Search",
+                            "title": "Job search", "status": "stopped"}],
+        }])
+        self.assertEqual(chat.model_dump()["messages"][0]["tool_calls"][0]["status"], "stopped")
+
     def setUp(self):
         self.pool = FakePool()
         self.schema = patch("app.api.conversations.ensure_conversation_schema", AsyncMock())

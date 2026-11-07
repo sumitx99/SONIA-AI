@@ -89,7 +89,8 @@ export default function SoniaChatInterface() {
   const current = sessions.find((session) => session.id === currentId);
   const messages = current?.messages ?? [];
   const answeringHere = !!generatingId && generatingId === currentId;
-  const canResume = !!stopped && stopped.id === currentId && !input.trim() && !generatingId;
+  const resumeAvailable = !!stopped && stopped.id === currentId && !generatingId && !pending;
+  const canResume = resumeAvailable && !input.trim();
   const composerAction = answeringHere ? "stop" : canResume ? "resume" : "send";
   const composerActionLabel = answeringHere ? "Stop answering" : canResume ? "Resume answer" : "Send message";
   const toolStepCount = messages[messages.length - 1]?.tool_calls?.length ?? 0;
@@ -244,7 +245,7 @@ export default function SoniaChatInterface() {
       if (controller.signal.aborted) {
         setStopped({ id, query: continuation?.query ?? query, hasText: !!text || !!continuation?.hasText });
         if (started) update({ streaming: false, notice: "Answer stopped. Resume to continue.",
-          tool_calls: toolCalls.map(call => call.status === "running" || call.status === "awaiting_approval" ? { ...call, status: "denied" } : call) });
+          tool_calls: toolCalls.map(call => call.status === "running" || call.status === "awaiting_approval" ? { ...call, status: "stopped" } : call) });
       } else if (started) {
         update({ streaming: false, tool_calls: toolCalls.map(call => call.status === "running" ? { ...call, status: "error" } : call),
           ...(text ? { notice: "The answer was cut off part-way. Ask again to get the rest." }
@@ -592,7 +593,7 @@ export default function SoniaChatInterface() {
                         {message.sender === "bot" ? "SONIA" : "YOU"}
                         {message.sender === "user" && editingMessageId !== message.id && <button type="button" className="edit-prompt-button" aria-label="Edit prompt" title="Edit prompt" disabled={!!generatingId || !!pending} onClick={() => { setEditingMessageId(message.id); setEditedPrompt(message.content); }}><Pencil size={13} /></button>}
                       </div>
-                      {message.sender === "bot" && <ToolCalls calls={message.tool_calls} />}
+                      {message.sender === "bot" && <ToolCalls calls={message.tool_calls} streaming={message.streaming} />}
                       {message.sender === "bot" && message.streaming && <WebSources sources={message.sources} />}
                       {editingMessageId === message.id ? <form className="prompt-edit-form" onSubmit={event => { event.preventDefault(); void ask({ messageId: message.id, content: editedPrompt }); }}>
                         <label className="sr-only" htmlFor={`edit-${message.id}`}>Edit your question</label>
@@ -627,6 +628,12 @@ export default function SoniaChatInterface() {
             <div ref={end} />
           </div>
           <div className="composer-area">
+            {resumeAvailable && <div className="answer-resume" role="status">
+              <span>Answer stopped.</span>
+              <button type="button" onClick={() => void ask(undefined, true)}>
+                <Play size={13} aria-hidden="true" /> Resume answer
+              </button>
+            </div>}
             {!!current?.documents.length && (
               <div className="document-chips">
                 {current.documents.map((name, index) => (

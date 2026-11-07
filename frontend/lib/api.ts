@@ -7,9 +7,22 @@ const API_BASE_URL = ((process.env.NEXT_PUBLIC_API_URL ?? "").trim().replace(/^[
 
 export class AuthRequiredError extends Error {}
 
+/** Stop waiting immediately, even while auth or a stream transport is still settling. */
+function abortable<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return operation;
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason ?? new DOMException("Answer stopped", "AbortError"));
+    signal.addEventListener("abort", abort, { once: true });
+    operation.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+    if (signal.aborted) abort();
+  });
+}
+
 // Every API call carries the signed-in user's access token; the backend scopes data to that user.
 async function apiFetch(path: string, init: RequestInit = {}, expectedUserId?: string) {
-  const { data } = await supabase.auth.getSession();
+  const signal = init.signal ?? undefined;
+  signal?.throwIfAborted();
+  const { data } = await abortable(supabase.auth.getSession(), signal);
   const token = data.session?.access_token;
   if (!token) throw new AuthRequiredError("Please sign in to continue");
   if (expectedUserId && data.session?.user.id !== expectedUserId) {
@@ -19,7 +32,7 @@ async function apiFetch(path: string, init: RequestInit = {}, expectedUserId?: s
   headers.set("Authorization", `Bearer ${token}`);
   let response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers });
   if (response.status === 401) {
-    const refreshed = await supabase.auth.refreshSession();
+    const refreshed = await abortable(supabase.auth.refreshSession(), signal);
     if (refreshed.data.session) {
       if (expectedUserId && refreshed.data.session.user.id !== expectedUserId) {
         throw new AuthRequiredError("The signed-in account changed. Please reopen your conversation.");
@@ -50,7 +63,7 @@ export interface ToolCall {
   server: string;
   tool: string;
   title: string;
-  status: "awaiting_approval" | "running" | "done" | "error" | "denied";
+  status: "awaiting_approval" | "running" | "done" | "error" | "denied" | "stopped";
   arguments?: Record<string, unknown>;
   summary?: string | null;
 }
@@ -370,7 +383,7 @@ export const streamMessage = async (
   let wroteText = false;
   try {
   for (;;) {
-    const { value, done } = await reader.read();
+    const { value, done } = await abortable(reader.read(), signal);
     signal?.throwIfAborted();
     if (done) break;
     buffer += value;
@@ -406,8 +419,8 @@ export const streamMessage = async (
   if (!wroteText) throw new Error("The answer didn't arrive");
   return { cutOff: true };
   } finally {
-    await reader.cancel().catch(() => {});
-    reader.releaseLock();
+    // A slow transport's cleanup must not hold the UI in its answering state.
+    void reader.cancel().catch(() => {}).finally(() => reader.releaseLock());
   }
 };
 

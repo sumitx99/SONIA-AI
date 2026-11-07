@@ -47,7 +47,7 @@ function checkState(citation: Citation) {
   if (citation.verified) return { className: "", label: "", Icon: BadgeCheck, text: "Found in source", tone: styles.verified };
   if (citation.source_unreadable) return { className: styles.unchecked, label: " (could not be checked)", Icon: CircleHelp,
     text: "Page couldn’t be opened to check this quote", tone: styles.unknown };
-  return { className: styles.unverified, label: " (not verified)", Icon: AlertTriangle, text: "Not found in source", tone: styles.warning };
+  return { className: styles.unverified, label: " (quote not verified)", Icon: AlertTriangle, text: "Quote not found in source", tone: styles.warning };
 }
 
 /**

@@ -7,7 +7,7 @@ import ts from 'typescript';
 const realRequire = createRequire(import.meta.url);
 function loadTypeScript(path, imports = {}) {
   const source = readFileSync(new URL(path, import.meta.url), 'utf8');
-  const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const code = ts.transpileModule(source, { fileName: path, compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } }).outputText;
   const module = { exports: {} };
   new Function('require', 'module', 'exports', code)((name) => imports[name] ?? realRequire(name), module, module.exports);
   return module.exports;
@@ -50,6 +50,47 @@ function client(auth = {}) {
   } } } });
 }
 const response = (status, payload) => new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } });
+
+test('Stop interrupts auth waiting before an answer request is sent', { timeout: 1000 }, async (t) => {
+  let finishAuth;
+  let fetched = false;
+  const api = client({ getSession: () => new Promise(resolve => { finishAuth = resolve; }) });
+  t.mock.method(globalThis, 'fetch', async () => { fetched = true; });
+  const controller = new AbortController();
+  const request = api.streamMessage('Explain this', [], { onDelta() {} }, [], controller.signal);
+  controller.abort();
+  await assert.rejects(request, { name: 'AbortError' });
+  finishAuth({ data: { session: { access_token: 'token' } } });
+  await Promise.resolve();
+  assert.equal(fetched, false);
+});
+
+for (const partial of ['', 'The BLEU score is ']) {
+  test(`Stop releases an idle stream ${partial ? 'after partial text' : 'before any text'} without waiting for transport cleanup`, { timeout: 1000 }, async (t) => {
+    let waiting;
+    const idle = new Promise(resolve => { waiting = resolve; });
+    let reads = 0;
+    let cancelled = false;
+    const reader = {
+      read: () => {
+        if (partial && reads++ === 0) return Promise.resolve({ value: `event: delta\ndata: ${JSON.stringify({ text: partial })}\n\n`, done: false });
+        waiting();
+        return new Promise(() => {});
+      },
+      cancel: () => { cancelled = true; return new Promise(() => {}); },
+      releaseLock() {},
+    };
+    t.mock.method(globalThis, 'fetch', async () => ({ ok: true, status: 200, body: { pipeThrough: () => ({ getReader: () => reader }) } }));
+    const text = [];
+    const controller = new AbortController();
+    const request = client().streamMessage('Explain this', [7], { onDelta: piece => text.push(piece) }, [], controller.signal);
+    await idle;
+    controller.abort();
+    await assert.rejects(request, { name: 'AbortError' });
+    assert.equal(cancelled, true);
+    assert.equal(text.join(''), partial);
+  });
+}
 
 test('automatic upload retries reuse a request ID and keep the document scope', async (t) => {
   const calls = [];
@@ -222,6 +263,46 @@ test('web progress keeps queries but hides internal models and provider errors',
  assert.doesNotMatch(JSON.stringify(clean),/Groq|gpt-oss/);
  const mcp={id:'mcp',server:'My notes',tool:'read',title:'Read note',status:'done'};
  assert.deepEqual(webActivity.publicToolCalls([mcp],'hi'),[mcp]);
+});
+
+const { ToolCalls } = loadTypeScript('../components/chat/tool-calls.tsx', {
+  '@/lib/web-activity': webActivity,
+  '@/lib/api': { decideToolCall: async () => {}, handleApiError: String },
+  './tool-activity.module.css': { default: new Proxy({}, { get: (_, key) => String(key) }) },
+});
+const renderActivity = (calls, streaming = false) => realRequire('react-dom/server').renderToStaticMarkup(
+  realRequire('react').createElement(ToolCalls, { calls, streaming }));
+const jobStep = { id: 'jobs-1', server: 'JSearch Jobs', tool: 'Job_Search', title: 'Job_Search',
+  status: 'running', arguments: { query: 'software developer jobs in Mohali' } };
+
+test('activity follows real tool lifecycle and keeps JSON inside collapsed Details', () => {
+  const running = renderActivity([jobStep], true);
+  assert.match(running, /Using Job Search/);
+  assert.match(running, /JSearch Jobs/);
+  assert.match(running, /In progress/);
+  assert.match(running, /<ol/);
+  assert.match(running, /<details[^>]*><summary>Details/);
+  assert.doesNotMatch(running, /<details[^>]*\bopen\b|Preparing answer|MCP ·|>Running</);
+  const done = { ...jobStep, status: 'done' };
+  assert.match(renderActivity([done], true), /Complete.*Preparing answer/s);
+  assert.doesNotMatch(renderActivity([done], false), /Preparing answer/);
+  assert.doesNotMatch(renderActivity([done, { ...jobStep, id: 'jobs-2' }], true), /Preparing answer/);
+});
+
+test('activity distinguishes approval, failure, decline and stop without fake success', () => {
+  const approval = renderActivity([{ ...jobStep, status: 'awaiting_approval' }], true);
+  assert.match(approval, /Waiting for you/);
+  assert.match(approval, /Deny/);
+  assert.match(approval, /Allow/);
+  assert.doesNotMatch(approval, /Preparing answer/);
+  for (const [status, label] of [['error', 'Failed'], ['denied', 'Declined'], ['stopped', 'Stopped']]) {
+    const rendered = renderActivity([{ ...jobStep, status }]);
+    assert.match(rendered, new RegExp(label));
+    assert.doesNotMatch(rendered, /Preparing answer|>Complete</);
+  }
+  const stoppedWeb = webActivity.publicToolCalls([{ ...jobStep, server: 'Web', status: 'stopped' }]);
+  assert.equal(stoppedWeb[0].title, 'Web search stopped');
+  assert.equal(renderActivity([], true), '');
 });
 
 const remarkCitations = loadTypeScript('../lib/markdown/remark-citations.ts').default;

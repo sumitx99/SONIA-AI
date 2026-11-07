@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from app.services.source_reader import read_source
 from app.services.web_activity import safe_url
+from app.services.tool_evidence import tool_passages
 
 logger = logging.getLogger(__name__)
 MARKER = "SONIA_DOCUMENT_EVIDENCE\n"
@@ -136,8 +137,13 @@ def check_citations(answer: str, context: str, web_sources=(), evidence=()) -> t
             # A source the answer never had (an invented URL or id) is shown, but never linked.
             citation = {"kind": "unknown", "title": "Unknown source", "text": ""}
         text = citation.pop("text")
+        # Structured tools can encode punctuation/newlines as JSON escapes. Check exact
+        # decoded fields too, without merging fields or accepting paraphrased summaries.
+        candidates = [text]
+        if citation["kind"] == "tool":
+            candidates.extend(passage["text"] for passage in tool_passages(text))
         citation.update(n=number, quote=quote,
-                        verified=len(quote) >= 8 and _normalized(quote) in _normalized(text),
+                        verified=len(quote) >= 8 and any(_normalized(quote) in _normalized(candidate) for candidate in candidates),
                         source_unreadable=citation["kind"] == "web" and not text.strip())
         citations.append(citation)
     return body, sorted(citations, key=lambda item: item["n"])

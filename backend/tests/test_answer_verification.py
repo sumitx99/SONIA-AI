@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from app.services import answer_verification as checker
+from app.services.tool_evidence import tool_passages
 
 PASSAGE = {"id": "D12", "kind": "document", "title": "attention.pdf", "document_id": 7, "chunk_id": 12,
            "text": "The big transformer model establishes a new state-of-the-art BLEU score of 28.4."}
@@ -54,6 +55,40 @@ class CitationTests(unittest.TestCase):
         _, [citation] = checker.check_citations(
             answer([{"n": 1, "source": "Tab12cd34", "quote": "Launch on Friday. Owner: Priya."}]), "", [], evidence)
         self.assertTrue(citation["verified"])
+
+    def test_json_tool_quotes_match_decoded_field_text(self):
+        title = 'Senior Software Engineer – MERN Stack\n"Platform" team'
+        result = json.dumps({"data": {"jobs": [{"job_title": title, "employer_name": "Walkwel Technology"}]}})
+        evidence = [{"id": "Tjobs", "kind": "tool", "title": "JSearch Jobs", "text": result}]
+        entries = [{"n": 1, "source": "Tjobs", "quote": title},
+                   {"n": 2, "source": "Tjobs", "quote": "Walkwel Technology"}]
+        _, citations = checker.check_citations(answer(entries), "", [], evidence)
+        self.assertEqual([c["verified"] for c in citations], [True, True])
+        self.assertEqual(tool_passages(result)[0], {"path": '$["data"]["jobs"][0]["job_title"]', "text": title})
+
+    def test_successful_tool_does_not_verify_assembled_or_changed_quotes(self):
+        result = json.dumps({"jobs": [
+            {"title": "Senior Software Engineer", "company": "Walkwel Technology", "city": "Mohali, Punjab"},
+            {"title": "Full Stack Developer", "company": "Another company"}]})
+        evidence = [{"id": "Tjobs", "kind": "tool", "title": "JSearch Jobs", "text": result}]
+        quotes = ["Senior Software Engineer Company: Walkwel Technology Location: Mohali, Punjab",
+                  "Walkwel Technology Full Stack Developer", "Salary: ₹85,000 per month"]
+        entries = [{"n": n, "source": "Tjobs", "quote": quote} for n, quote in enumerate(quotes, 1)]
+        _, citations = checker.check_citations(answer(entries), "", [], evidence)
+        self.assertEqual([c["verified"] for c in citations], [False, False, False])
+
+    def test_nested_gateway_json_is_decoded_without_trusting_unknown_sources(self):
+        title = "Engineer – Platform"
+        result = json.dumps({"content": [{"text": json.dumps({"title": title})}]})
+        evidence = [{"id": "Tjobs", "kind": "tool", "title": "Jobs", "text": result}]
+        entries = [{"n": 1, "source": "Tjobs", "quote": title},
+                   {"n": 2, "source": "Tinvented", "quote": title}]
+        _, citations = checker.check_citations(answer(entries), "", [], evidence)
+        self.assertEqual([c["verified"] for c in citations], [True, False])
+
+    def test_plain_or_truncated_tool_results_do_not_invent_decoded_excerpts(self):
+        self.assertEqual(tool_passages("Plain source text."), [])
+        self.assertEqual(tool_passages('{"jobs": [{"title": "Engineer…[truncated]'), [])
 
     def test_malformed_blocks_and_entries_are_ignored_safely(self):
         body, citations = checker.check_citations("Plain answer.\n\n```citations\nnot json\n```", CONTEXT)

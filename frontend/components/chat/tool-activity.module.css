@@ -1,0 +1,24 @@
+.activity { max-width:620px; margin:6px 0 18px 31px; font-size:12px; }
+.heading { margin:0 0 10px; font-size:11px; font-weight:600; color:var(--muted-foreground); }
+.steps { list-style:none; margin:0; padding:0; }
+.step { position:relative; display:flex; align-items:flex-start; gap:10px; padding:0 0 14px; }
+.step:not(:last-child)::before { content:""; position:absolute; left:10px; top:23px; bottom:2px; width:1px; background:var(--line); }
+.step:last-child { padding-bottom:0; }
+.marker { display:grid; place-items:center; flex:none; width:21px; height:21px; border:1px solid var(--line); border-radius:50%; background:var(--card); color:var(--muted-foreground); }
+.content { flex:1; min-width:0; padding-top:1px; }
+.row { display:flex; align-items:baseline; gap:10px; }
+.title { min-width:0; line-height:1.65; overflow-wrap:anywhere; color:var(--foreground); }
+.status { margin-left:auto; flex:none; color:var(--muted-foreground); font-size:10.5px; }
+.provider { margin:1px 0 0; color:var(--muted-foreground); font-size:11px; overflow-wrap:anywhere; }
+.step[data-status="running"] .marker { color:#756043; border-color:#cbbda7; }
+.step[data-status="done"] .marker { color:#4f6b3d; border-color:#c8d2bf; }
+.step[data-status="error"] .marker { color:#a13c2b; border-color:#e2b4a8; }
+.details { margin-top:4px; }
+.details summary { display:flex; align-items:center; gap:4px; width:fit-content; cursor:pointer; list-style:none; color:var(--muted-foreground); font-size:11px; }
+.details summary::-webkit-details-marker { display:none; }
+.details[open] summary svg { transform:rotate(180deg); }
+.details summary:focus-visible { outline:2px solid var(--ring); outline-offset:3px; border-radius:2px; }
+.raw { max-height:200px; overflow:auto; margin:6px 0 0; padding:9px 11px; border:1px solid var(--line); border-radius:6px; background:#faf8f2; font-size:11px; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; }
+.raw p { margin:0; }
+pre.raw { font-family:var(--font-geist-mono),monospace; }
+@media(max-width:760px) { .activity { margin-left:0; } .row { flex-wrap:wrap; gap:2px 8px; } }
