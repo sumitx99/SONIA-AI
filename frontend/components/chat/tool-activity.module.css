@@ -26,3 +26,5 @@
 .raw p { margin:0; }
 pre.raw { font-family:var(--font-geist-mono),monospace; }
 @media(max-width:760px) { .activity { margin-left:0; } .row { flex-wrap:wrap; gap:2px 8px; } }
+
+:global(.dark) .raw { background:var(--surface-tint); color:var(--foreground); }

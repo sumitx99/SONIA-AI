@@ -1,5 +1,6 @@
 "use client";
 
+
 import {
   useEffect,
   useRef,
@@ -19,6 +20,9 @@ import {
   Menu,
   MessageSquare,
   Paperclip,
+  PanelLeftClose,
+  PanelLeftOpen,
+  SquarePen,
   Pencil,
   Plus,
   Play,
@@ -29,6 +33,7 @@ import { Brand, Emblem } from "@/components/brand";
 import { AccountMenu } from "@/components/account/account-menu";
 import { DocumentImageGallery } from "@/components/chat/document-image";
 import { GeneratedImageGallery } from "@/components/chat/generated-images";
+import { PromptComposer } from "@/components/chat/prompt-composer";
 import { WebImageGallery } from "@/components/chat/web-images";
 import { MarkdownMessage } from "@/components/chat/markdown-message";
 import { ToolCalls, WebSources } from "@/components/chat/tool-calls";
@@ -80,13 +85,25 @@ export default function SoniaChatInterface() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const expandSidebarButton = useRef<HTMLButtonElement>(null);
+  const collapseSidebarButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    try { setSidebarCollapsed(localStorage.getItem("sonia-sidebar-collapsed") === "true"); } catch { /* Browser storage is optional. */ }
+  }, []);
+  function toggleSidebar() {
+    const collapsed = !sidebarCollapsed;
+    setSidebarCollapsed(collapsed);
+    try { localStorage.setItem("sonia-sidebar-collapsed", String(collapsed)); } catch { /* Keep the control usable without storage. */ }
+    requestAnimationFrame(() => (collapsed ? expandSidebarButton : collapseSidebarButton).current?.focus());
+  }
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const [fileError, setFileError] = useState("");
   const [uploadStatus, setUploadStatus] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
-  const textarea = useRef<HTMLTextAreaElement>(null);
+  const promptEditor = useRef<HTMLDivElement>(null);
   const end = useRef<HTMLDivElement>(null);
   const busy = useRef(false);
   const current = sessions.find((session) => session.id === currentId);
@@ -125,7 +142,7 @@ export default function SoniaChatInterface() {
     setInput("");
     setFileError("");
     setSidebarOpen(false);
-    textarea.current?.focus();
+    promptEditor.current?.focus();
     return id;
   }
 
@@ -375,7 +392,7 @@ export default function SoniaChatInterface() {
     router.replace("/auth");
   }
 
-  function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+  function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (
       event.key === "Enter" &&
       !event.shiftKey &&
@@ -409,9 +426,18 @@ export default function SoniaChatInterface() {
           id="chat-sidebar"
           className={`chat-sidebar ${sidebarOpen ? "is-open" : ""}`}
           aria-label="Conversations"
+          data-collapsed={sidebarCollapsed}
         >
           <div className="sidebar-brand">
             <Brand />
+            <button ref={expandSidebarButton} type="button" className="sidebar-expand-button" onClick={toggleSidebar}
+              aria-label="Expand sidebar" aria-expanded={false} aria-controls="chat-sidebar" title="Expand sidebar">
+              <Emblem className="sidebar-rail-logo" /><PanelLeftOpen className="sidebar-expand-icon" size={20} aria-hidden="true" />
+            </button>
+            <button ref={collapseSidebarButton} type="button" className="icon-button sidebar-collapse-button" onClick={toggleSidebar}
+              aria-label="Collapse sidebar" aria-expanded={true} aria-controls="chat-sidebar" title="Collapse sidebar">
+              <PanelLeftClose size={18} aria-hidden="true" />
+            </button>
             <button
               className="icon-button mobile-only"
               aria-label="Close navigation"
@@ -420,8 +446,8 @@ export default function SoniaChatInterface() {
               <X size={18} />
             </button>
           </div>
-          <button className="button button-ink new-chat" onClick={newChat} disabled={!historyLoaded}>
-            <Plus size={16} /> New conversation
+          <button className="button button-ink new-chat" onClick={newChat} disabled={!historyLoaded} aria-label="New conversation" title="New conversation">
+            <Plus className="sidebar-new-plus" size={16} /><SquarePen className="sidebar-new-compose" size={21} aria-hidden="true" /><span>New conversation</span>
           </button>
           <div className="sidebar-section-label mono">
             YOUR CONVERSATIONS{" "}
@@ -541,9 +567,7 @@ export default function SoniaChatInterface() {
                 {current?.title ?? "A fresh perspective"}
               </span>
             </div>
-            <span className="mono header-edition">
-              SONIA / YOUR DOCUMENT COMPANION
-            </span>
+            <span className="mono header-edition">SONIA / YOUR DOCUMENT COMPANION</span>
           </header>
           <div className="chat-scroll">
             {current?.recovered && !messages.length && <p role="status" className="form-notice">
@@ -588,7 +612,7 @@ export default function SoniaChatInterface() {
                       key={suggestion}
                       onClick={() => {
                         setInput(suggestion);
-                        textarea.current?.focus();
+                        promptEditor.current?.focus();
                       }}
                     >
                       {suggestion}
@@ -667,17 +691,16 @@ export default function SoniaChatInterface() {
                 void ask();
               }}
             >
-              <label className="sr-only" htmlFor="question">
+              <span id="question-label" className="sr-only">
                 Ask Sonia about your document
-              </label>
-              <textarea
+              </span>
+              <PromptComposer
                 id="question"
-                ref={textarea}
+                ref={promptEditor}
                 value={input}
-                onChange={(event) => setInput(event.target.value)}
+                onChange={setInput}
                 onKeyDown={onKeyDown}
                 placeholder="What’s on your mind?"
-                rows={2}
                 disabled={!!pending || !!generatingId || !historyLoaded}
               />
               <div className="composer-controls">

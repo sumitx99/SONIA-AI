@@ -116,3 +116,7 @@ button.marker:focus-visible { outline: 2px solid var(--ring); outline-offset: 1p
 .link:disabled { opacity: 0.6; cursor: progress; }
 .error { flex-basis: 100%; margin: 0; font-size: 11px; color: #a13c2b; }
 .arrow { fill: var(--card); }
+
+:global(.dark) .marker { background:var(--surface-tint); color:var(--foreground); border-color:var(--line); }
+:global(.dark) .quote { background:var(--surface-tint); }
+:global(.dark) .link { color:var(--foreground); }

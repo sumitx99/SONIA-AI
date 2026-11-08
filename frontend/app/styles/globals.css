@@ -1351,7 +1351,8 @@ h2 {
 .chat-composer:focus-within {
   border-color: var(--olive);
 }
-.chat-composer textarea {
+.chat-composer .prompt-composer-input {
+  display: block;
   background: transparent;
   color: var(--ink);
   border: 0;
@@ -1360,14 +1361,25 @@ h2 {
   min-height: 48px;
   max-height: 160px;
   resize: vertical;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   font-size: 13px;
   line-height: 1.7;
 }
-.chat-composer textarea:focus-visible {
+.chat-composer .prompt-composer-input:focus-visible {
   outline: 0;
 }
-.chat-composer textarea::placeholder {
+.chat-composer .prompt-composer-input:empty::before {
+  content: attr(data-placeholder);
   color: #8c8c7d;
+  pointer-events: none;
+}
+.chat-composer .prompt-composer-input a[data-prompt-link] {
+  color: var(--orange);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
 }
 .composer-controls {
   display: flex;

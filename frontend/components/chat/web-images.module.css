@@ -13,3 +13,8 @@
 .error p { margin: 0; }
 .error button { display: flex; align-items: center; gap: 5px; padding: 7px 10px; border: 1px solid #ccc; border-radius: 8px; }
 .loading { display: flex; align-items: center; gap: 8px; color: #777; font-size: 12px; }
+
+:global(.dark) .card { background:var(--card); border-color:var(--line); }
+:global(.dark) .preview { background:var(--surface-tint); }
+:global(.dark) :is(.eyebrow,.author,.caption small,.loading) { color:var(--muted-foreground); }
+:global(.dark) .links a { color:var(--primary); }

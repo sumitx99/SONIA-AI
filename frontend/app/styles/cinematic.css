@@ -266,3 +266,18 @@
  .process-explorer *, .process-explorer *::after { animation:none !important; transition:none !important; }
  .process-file-stack::after { opacity:0; }
 }
+
+/* Keep the sculpture's cinematic stage; reading sections follow appearance. */
+html.dark .studio-site { --paper:var(--background); --ink:var(--foreground); --line:var(--border); background:var(--paper); color:var(--ink); }
+html.dark .studio-site .studio-dark { background:radial-gradient(ellipse at 80% 25%,#243d3d55,transparent 65%),#0c1219; }
+html .studio-site .studio-header .theme-switch { --card:#1b2630; --foreground:#e6ecef; --muted-foreground:#b6c3cd; --line:#3a4852; --surface-tint:#30404b; }
+html.dark .studio-site :is(.method-intro > p,.method-copy p,.studio-maker-copy > p,.studio-section-label,.studio-footer > span) { color:var(--muted-foreground); }
+html.dark .studio-site .method-number { color:var(--foreground); border-color:var(--line); }
+html.dark .studio-site .method-intro h2 em { color:var(--primary); }
+html.dark .studio-site :is(.source-methods,.source-method-row,.studio-footer) { border-color:var(--line); }
+html.dark .studio-site .studio-demo-content { background:var(--paper); color:var(--foreground); }
+html.dark .studio-site .studio-demo-chat .preview-question { background:var(--user-bubble); color:var(--foreground); }
+html.dark .studio-site .studio-demo-chat :is(.preview-composer,.preview-figure) { background:var(--card); border-color:var(--line); color:var(--foreground); }
+.dark .studio-site .method-visual { background:#1d2a34; }
+.dark .studio-site .studio-maker-copy h2 em { color:var(--primary); }
+@media(max-width:600px) { html .studio-site .studio-header-actions { gap:7px; } html .studio-site .studio-header-actions > button { display:none; } html .studio-site .studio-header-cta { padding:10px; gap:5px; } html .studio-site .studio-header .brand > span { font-size:25px; } html .studio-site .studio-header .brand > svg { width:27px; height:27px; } }

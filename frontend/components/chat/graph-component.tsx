@@ -5,6 +5,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { AlertTriangle, BarChart3, Check, Copy, Download, Loader2, Maximize2, Table2, X } from "lucide-react";
 import { chartTables, parseChartSpec, type ChartBundle, type ChartSpec } from "@/lib/markdown/chart-spec";
 import styles from "./graph-component.module.css";
+import { useTheme } from "next-themes";
 
 // Each build is loaded only when an answer has a chart that needs it (1.3–2.8 MB each).
 const PLOTLY_BUILDS: Record<ChartBundle, () => Promise<{ default: PlotlyApi }>> = {
@@ -28,22 +29,25 @@ function axis(overrides: unknown) {
 }
 
 /** The model's layout in Sonia's look. The title is shown on the card instead of in the plot. */
-function themedLayout(spec: ChartSpec, font: string) {
+function themedLayout(spec: ChartSpec, font: string, dark = false) {
+  const ink = dark ? "#e6ecef" : INK;
+  const muted = dark ? "#a0b0bc" : MUTED;
+  const grid = dark ? "#30404b" : GRID;
   const { title: _title, xaxis, yaxis, geo, map, ...rest } = spec.layout;
   return {
     colorway: COLORWAY,
     ...rest,
-    font: { family: font, size: 12, color: INK },
+    font: { family: font, size: 12, color: ink },
     paper_bgcolor: "rgba(0,0,0,0)",
     plot_bgcolor: "rgba(0,0,0,0)",
     margin: { t: 12, r: 16, b: 16, l: 16 },
     // Hover text otherwise inherits the dark plot font and disappears on this background.
     hoverlabel: { font: { family: font, size: 12, color: "#ffffff" }, bgcolor: INK, bordercolor: INK },
-    legend: { orientation: "h", x: 0, y: -0.18, font: { color: MUTED }, ...(isObject(rest.legend) ? rest.legend : {}) },
-    xaxis: axis(xaxis),
-    yaxis: axis(yaxis),
+    legend: { orientation: "h", x: 0, y: -0.18, font: { color: muted }, ...(isObject(rest.legend) ? rest.legend : {}) },
+    xaxis: { ...axis(xaxis), ...(dark && { gridcolor: grid, linecolor: grid, zerolinecolor: grid }) },
+    yaxis: { ...axis(yaxis), ...(dark && { gridcolor: grid, linecolor: grid, zerolinecolor: grid }) },
     ...(spec.bundle === "geo" && { geo: {
-      bgcolor: "rgba(0,0,0,0)", landcolor: "#f1ebe1", showland: true, showcountries: true,
+      bgcolor: "rgba(0,0,0,0)", landcolor: dark ? "#24313d" : "#f1ebe1", showland: true, showcountries: true,
       countrycolor: "#cfc6b8", coastlinecolor: "#cfc6b8", showframe: false,
       projection: { type: "natural earth" }, ...(isObject(geo) ? geo : {}),
     } }),
@@ -55,6 +59,7 @@ function themedLayout(spec: ChartSpec, font: string) {
 function GraphPlot({ spec, height, onReady }: {
   spec: ChartSpec; height: number; onReady?: (draw: { element: HTMLDivElement; plotly: PlotlyApi } | null) => void;
 }) {
+  const { resolvedTheme } = useTheme();
   const ref = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<"loading" | "ready" | "failed">("loading");
 
@@ -74,7 +79,7 @@ function GraphPlot({ spec, height, onReady }: {
         const data = structuredClone(spec.data).map((trace) =>
           (trace.type === "scattermap" || trace.type === "scattergeo") && !isObject(trace.marker)
             ? { ...trace, marker: { size: 11 } } : trace);
-        await plotly.react(element, data, themedLayout(structuredClone(spec), font), {
+        await plotly.react(element, data, themedLayout(structuredClone(spec), font, resolvedTheme === "dark"), {
           responsive: true, displaylogo: false, scrollZoom: spec.bundle !== "cartesian",
           modeBarButtonsToRemove: ["select2d", "lasso2d", "toImage", "sendDataToCloud"],
         });
@@ -90,7 +95,7 @@ function GraphPlot({ spec, height, onReady }: {
       onReady?.(null);
       if (plotly) plotly.purge(element);
     };
-  }, [spec, onReady]);
+  }, [spec, onReady, resolvedTheme]);
 
   return (
     <div className={styles.plotArea} style={{ height }}>

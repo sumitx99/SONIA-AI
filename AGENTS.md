@@ -20,6 +20,9 @@
   verified end to end or in production. Passing tests alone do not prove the user's
   production issue is fixed.
 - Implement root-cause fixes with minimal, reusable, production-quality changes.
+- Do not create unnecessary files. Reuse existing files and components where
+  appropriate; add a new file only when it has a clear, necessary responsibility.
+  Avoid redundant documentation, helper scripts, and implementation-mirroring tests.
 - Do not route natural-language intent with hardcoded greeting/keyword lists or hide
   incorrect behavior in the UI. Let the LLM choose tools under clear instructions.
 - Keep deterministic backend checks for authorization, source provenance, citations,

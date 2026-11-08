@@ -6,6 +6,7 @@ import { GeistMono } from "geist/font/mono";
 import { Analytics } from "@vercel/analytics/next";
 import { Suspense } from "react";
 import { SessionLifetime } from "@/components/session-lifetime";
+import { SoniaTheme } from "@/components/theme-switch";
 import "./styles/globals.css";
 import "./styles/identity.css";
 import "./styles/account-menu.css";
@@ -44,13 +45,15 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body
         className={`font-sans ${GeistSans.variable} ${GeistMono.variable} ${editorialSerif.variable}`}
       >
+        <SoniaTheme>
         <SessionLifetime />
         <Suspense fallback={null}>{children}</Suspense>
         <Analytics />
+        </SoniaTheme>
       </body>
     </html>
   );

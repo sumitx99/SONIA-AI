@@ -14,8 +14,32 @@ function loadTypeScript(path, imports = {}) {
 }
 const noImages = loadTypeScript('../lib/markdown/remark-no-images.ts').default;
 const { isImageUrl } = loadTypeScript('../lib/markdown/image-url.ts');
+const { promptSegments, safePromptUrl } = loadTypeScript('../lib/markdown/prompt-links.ts');
 const image = () => ({ type: 'image', url: 'invented.png', alt: 'Figure 1' });
 const text = (value) => ({ type: 'text', value });
+
+test('prompt composer recognizes typed HTTPS URLs and preserves surrounding prose', () => {
+  const prompt = 'Please read https://sonia-ai-murp.vercel.app/chat';
+  const segments = promptSegments(prompt);
+  assert.deepEqual(segments, [
+    { text: 'Please read ' },
+    { text: 'https://sonia-ai-murp.vercel.app/chat', url: 'https://sonia-ai-murp.vercel.app/chat' },
+  ]);
+  assert.equal(segments.map(segment => segment.text).join(''), prompt);
+});
+
+test('prompt URL recognition leaves trailing punctuation outside the link and rejects unsafe schemes', () => {
+  assert.deepEqual(promptSegments('Open https://example.com/page.'), [
+    { text: 'Open ' },
+    { text: 'https://example.com/page', url: 'https://example.com/page' },
+    { text: '.' },
+  ]);
+  assert.deepEqual(promptSegments('javascript:alert(1)'), [{ text: 'javascript:alert(1)' }]);
+  assert.deepEqual(promptSegments('plain text only'), [{ text: 'plain text only' }]);
+  assert.equal(safePromptUrl('https://sonia-ai-murp.vercel.app/chat'), 'https://sonia-ai-murp.vercel.app/chat');
+  assert.equal(safePromptUrl('javascript:alert(1)'), null);
+  assert.equal(safePromptUrl('not a url'), null);
+});
 
 test('only standard image URLs are accepted for generated_images events', () => {
   assert.equal(isImageUrl('https://i0.nekobot.xyz/4/d/b/1d7493e0bceea91f53406738e9065.jpg'), true);
