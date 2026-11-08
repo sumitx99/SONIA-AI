@@ -92,6 +92,7 @@ class AbandonedUploadTests(unittest.TestCase):
              patch.object(documents_api, "insert_file", return_value=7) as insert, \
              patch.object(documents_api, "set_document_source_key"), \
              patch.object(documents_api, "insert_embeddings"), \
+             patch.object(documents_api, "invalidate_conversations") as invalidate, \
              patch.object(documents_api, "ingest_document_images", return_value=0), \
              patch.object(documents_api.R2ImageStorage, "from_env", return_value=self.storage), \
              patch.object(documents_api, "process_pdf_with_docling", return_value="PDF text"), \
@@ -103,6 +104,7 @@ class AbandonedUploadTests(unittest.TestCase):
         discard.assert_awaited_once_with("user-1", "retry-1", documents_api.STALE_AFTER_SECONDS)
         self.storage.delete_upload.assert_called_once_with("users/user-1/chats/chat-1/documents/5")
         self.assertEqual(insert.await_args.args[4], "retry-1")
+        invalidate.assert_awaited_once_with("user-1")
 
     def test_attempt_still_running_elsewhere_gets_a_conflict_not_a_server_error(self):
         with patch.object(documents_api, "completed_upload", return_value=None), \

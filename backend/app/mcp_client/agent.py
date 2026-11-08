@@ -106,9 +106,9 @@ async def available_tools(user_id: str) -> tuple[list[dict], dict]:
     return declarations, registry
 
 
-async def _run_tool(user_id: str, connection: dict, tool: dict, arguments: dict) -> tuple[str, bool]:
+async def _run_tool(user_id: str, connection: dict, tool: dict, arguments: dict) -> tuple[str, bool, list[dict]]:
     if connection.get("unavailable_reason"):
-        return connection["unavailable_reason"], True
+        return connection["unavailable_reason"], True, []
     try:
         auth = provider_for(user_id, connection) if connection["auth_type"] == "oauth" else None
         async with open_session(connection, auth) as session:
@@ -130,9 +130,9 @@ async def _run_tool(user_id: str, connection: dict, tool: dict, arguments: dict)
                 await store.update_connection(user_id, connection["id"], last_error=message)
             except Exception:
                 logger.info("Could not save the connection's reauthorization status")
-            return message, True
+            return message, True, []
         logger.info("Tool %s on %s failed: %r", tool["name"], connection["url"], error)
-        return "The tool could not be reached or failed to run.", True
+        return "The tool could not be reached or failed to run.", True, []
 
 
 def _add_sources(grounding: dict, sources: dict) -> None:
@@ -448,7 +448,9 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
                     yield "tool_call", {**event, "status": "denied"}
                 else:
                     yield "tool_call", {**event, "status": "running"}
-                    text, is_error = await _run_tool(user_id, connection, tool, arguments)
+                    text, is_error, images = await _run_tool(user_id, connection, tool, arguments)
+                    if images:
+                        yield "generated_images", {"images": images, "tool_call_id": event["id"]}
                     if not is_error:
                         source_id = f"T{event['id'][:8]}"
                         yield "evidence", {"sources": [{"id": source_id, "kind": "tool",

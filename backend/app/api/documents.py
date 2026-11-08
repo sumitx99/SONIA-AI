@@ -15,6 +15,7 @@ from app.core.auth import current_user
 from app.core.db import (completed_upload, delete_document, discard_unfinished_upload, document_status,
                          finish_upload, get_document_source, insert_embeddings, insert_file,
                          owned_document_ids, set_document_source_key, set_images_status, touch_upload)
+from app.services.conversation_cache import invalidate_conversations
 from app.services.embeddings import get_embeddings_batch
 from app.services.images.image_db import find_document_images
 from app.services.images.image_pipeline import image_attachments, ingest_document_images
@@ -118,6 +119,7 @@ async def _process_upload(file, file_bytes, chat_id, request_id, user_id):
             # A retry after a lost response returns this result without creating a duplicate.
             await finish_upload(file_id, result)
             succeeded = True
+            await invalidate_conversations(user_id)
         if storage:
             _start_image_job(file_id, source_key, rich_content, storage, prefix)
         return result

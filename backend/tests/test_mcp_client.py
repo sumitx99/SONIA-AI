@@ -8,6 +8,7 @@ import socket
 import sys
 import types
 import unittest
+from base64 import b64encode
 from unittest.mock import AsyncMock, Mock, patch
 
 import requests
@@ -84,6 +85,26 @@ class SecretStorageTests(unittest.TestCase):
             "x-api-host": "linkedin-api8.p.rapidapi.com", "x-api-key": "secret"})
         self.assertEqual(session_module._headers(legacy), {"Authorization": "Bearer x"})
 
+    def test_mcp_image_content_and_direct_image_urls_are_returned_separately(self):
+        image_block = session_module.types.ImageContent(mimeType="image/png", data=b64encode(b"small image").decode())
+        text_block = session_module.types.TextContent(text="Created https://img.example.test/result.jpg?token=abc")
+        signed_url = session_module.types.TextContent(text="Image URL: https://cdn.example.test/render?id=123")
+        result = types.SimpleNamespace(content=[text_block, signed_url, image_block], structured_content=None, is_error=False)
+        text, is_error, images = session_module.result_text(result)
+        self.assertFalse(is_error)
+        self.assertIn("displayed separately", text)
+        self.assertEqual(len(images), 3)
+        self.assertTrue(images[0]["src"].startswith("data:image/png;base64,"))
+        self.assertEqual(images[1]["src"], "https://img.example.test/result.jpg?token=abc")
+        self.assertEqual(images[2]["src"], "https://cdn.example.test/render?id=123")
+
+    def test_mcp_image_payload_size_is_bounded_and_non_image_urls_are_ignored(self):
+        huge = session_module.types.ImageContent(mimeType="image/png",
+                                                 data=b64encode(b"x" * (session_module.MAX_IMAGE_BYTES + 1)).decode())
+        result = types.SimpleNamespace(content=[huge], structured_content=None, is_error=False)
+        self.assertEqual(session_module.result_text(result)[2], [])
+        self.assertFalse(session_module._is_image_url("https://example.test/page"))
+
 
 CONNECTION = {"id": "conn-1", "name": "Notes", "url": "https://notes.example.com/mcp", "auth_type": "none",
               "secret": None}
@@ -124,7 +145,7 @@ class ToolLoopTests(unittest.TestCase):
             return [event async for event in agent.answer_with_tools("user-1", "Find jobs", "", declarations, tools)]
 
         with patch.object(agent, "stream_gemini_parts", fake), \
-             patch.object(agent, "_run_tool", AsyncMock(return_value=(result, False))):
+             patch.object(agent, "_run_tool", AsyncMock(return_value=(result, False, []))):
             events = asyncio.run(main())
         reply = seen[1][0][2]["parts"][0]["functionResponse"]["response"]
         self.assertEqual(reply["result"], result)
@@ -138,7 +159,7 @@ class ToolLoopTests(unittest.TestCase):
     def collect(self, policy, decide=None, user="user-1"):
         declarations, tools = registry(policy)
         fake, seen = gemini_rounds(CALL, ANSWER)
-        run = AsyncMock(return_value=("Saved x", False))
+        run = AsyncMock(return_value=("Saved x", False, []))
 
         async def main():
             events = []
@@ -163,6 +184,22 @@ class ToolLoopTests(unittest.TestCase):
         self.assertEqual((reply["name"], reply["id"], reply["response"]["result"]),
                          ("c0__create_note", "call-1", "Saved x"))
         self.assertIn("untrusted", reply["response"]["source"])
+
+    def test_tool_images_stream_separately_from_the_answer_text(self):
+        declarations, tools = registry("allow")
+        fake, _ = gemini_rounds(CALL, ANSWER)
+        image = {"src": "https://images.example.test/generated.webp", "alt": "Generated image"}
+
+        async def main():
+            return [event async for event in agent.answer_with_tools("user-1", "Generate an image", "", declarations, tools)]
+
+        with patch.object(agent, "stream_gemini_parts", fake), \
+             patch.object(agent, "_run_tool", AsyncMock(return_value=("Image generated.", False, [image]))):
+            events = asyncio.run(main())
+        generated = next(data for name, data in events if name == "generated_images")
+        tool = next(data for name, data in events if name == "tool_call" and data["status"] == "running")
+        self.assertEqual(generated, {"images": [image], "tool_call_id": tool["id"]})
+        self.assertEqual(events[-1], ("delta", {"text": "Done."}))
 
     def test_ask_waits_for_approval_then_runs(self):
         events, run, _ = self.collect("ask", decide=lambda i: agent.resolve_approval("user-1", i, True))
@@ -197,7 +234,7 @@ class ToolLoopTests(unittest.TestCase):
         async def main():
             return [e async for e in agent.answer_with_tools("user-1", "q", "c", declarations, tools)]
         with patch.object(agent, "stream_gemini_parts", fake), \
-             patch.object(agent, "_run_tool", AsyncMock(return_value=("ok", False))):
+             patch.object(agent, "_run_tool", AsyncMock(return_value=("ok", False, []))):
             asyncio.run(main())
         self.assertEqual(len(seen), agent.MAX_ROUNDS + 1)
         self.assertEqual(seen[-1][1], [])
@@ -361,10 +398,10 @@ class OAuthFlowTests(unittest.TestCase):
         session_context.__aenter__ = AsyncMock(return_value=session)
         session_context.__aexit__ = AsyncMock(return_value=None)
         with patch.object(agent, "open_session", return_value=session_context), \
-             patch.object(agent, "call_tool", AsyncMock(return_value=("ok", False))), \
+             patch.object(agent, "call_tool", AsyncMock(return_value=("ok", False, []))), \
              patch.object(store, "update_connection", AsyncMock()) as update:
             result = asyncio.run(agent._run_tool("user-1", connection, {"name": "read"}, {}))
-        self.assertEqual(result, ("ok", False))
+        self.assertEqual(result, ("ok", False, []))
         self.assertIsNone(connection["last_error"])
         update.assert_awaited_once_with("user-1", "conn-1", last_error=None)
 

@@ -103,6 +103,7 @@ export interface ChatMessage {
   error?: boolean;
   images?: ImageAttachment[];
   web_images?: WebImage[];
+  generated_images?: GeneratedImage[];
   notice?: string | null;
   streaming?: boolean;
   tool_calls?: ToolCall[];
@@ -110,6 +111,11 @@ export interface ChatMessage {
   citations?: Citation[];
   /** Set while this upload message's document still has images in background processing. */
   images_pending_document_id?: number | null;
+}
+
+export interface GeneratedImage {
+  src: string;
+  alt: string;
 }
 
 export interface ChatSession {
@@ -350,6 +356,7 @@ export interface StreamHandlers {
   /** Provider-supplied claim/source mapping, delivered as soon as grounding metadata arrives. */
   onInlineCitation?: (citation: InlineGroundingCitation) => void;
   onWebImages?: (images: WebImage[]) => void;
+  onGeneratedImages?: (images: GeneratedImage[]) => void;
   /** The final answer text (without its citations block) and its checked citations, at the end. */
   onCitations?: (answer: string, citations: Citation[]) => void;
 }
@@ -415,6 +422,7 @@ export const streamMessage = async (
       else if (event === "sources") handlers.onSources?.(payload.sources);
       else if (event === "inline_citation") handlers.onInlineCitation?.(payload);
       else if (event === "web_images") handlers.onWebImages?.(payload.images);
+      else if (event === "generated_images") handlers.onGeneratedImages?.(payload.images);
       else if (event === "citations") handlers.onCitations?.(payload.answer, payload.citations);
       else if (event === "delta") {
         wroteText = true;

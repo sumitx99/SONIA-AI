@@ -10,8 +10,8 @@
 .brand > svg { width: 34px; height: 34px; }
 .brand-period { color: var(--primary); }
 .sonia-fold { transform-box: fill-box; transform-origin: center; transition: transform .5s cubic-bezier(.22,1,.36,1); }
-.brand:hover .sonia-fold-top { transform: translate(3px,-3px); }
-.brand:hover .sonia-fold-bottom { transform: translate(-3px,3px); }
+.brand:hover .sonia-fold-top, .chat-welcome-emblem:hover .sonia-fold-top { transform: translate(3px,-3px); }
+.brand:hover .sonia-fold-bottom, .chat-welcome-emblem:hover .sonia-fold-bottom { transform: translate(-3px,3px); }
 .brand-light .brand-period { color: #cdccca; }
 ::selection { background: #cdccca; color: #292826; }
 
@@ -46,7 +46,7 @@
 .header-title, .header-edition { color: #84756e; }
 .header-slash { color: #baa49f; }
 .chat-welcome { padding-top: clamp(40px,8vh,96px); }
-.chat-welcome > svg { color: var(--primary); width: 65px; height: 65px; animation: sonia-drift 7s ease-in-out infinite; }
+.chat-welcome > svg { color: var(--primary); width: 65px; height: 65px; }
 .chat-welcome h1 { font-family: var(--font-geist-sans), sans-serif; font-size: clamp(36px,4vw,58px); font-weight: 550; letter-spacing: -.065em; line-height: 1.1; }
 .chat-welcome h1 em { font-style: normal; color: #403f3d; }
 .chat-welcome .eyebrow { font-size: 9px; color: #84756e; }
@@ -118,7 +118,6 @@
 @keyframes source-middle { 0%,100% { transform: rotate(1deg); } 50% { transform: rotate(6deg) translateY(-4px); } }
 @keyframes source-front { 0%,100% { transform: rotate(-9deg); } 50% { transform: rotate(-13deg) translateY(-5px); } }
 @keyframes source-signal { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-9px); } }
-@keyframes sonia-drift { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
 
 @media (max-width: 720px) {
   .account-statement h1 { font-size: 48px; }
@@ -127,11 +126,12 @@
   .chat-sidebar .sidebar-bottom { padding-top: 18px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .sonia-fold, .source-sheet, .source-signal, .chat-welcome > svg,
+  .sonia-fold, .source-sheet, .source-signal,
   .studio-site .studio-orbit-label > svg { animation: none !important; transition: none !important; }
   .new-chat, .upload-invite, .upload-icon, .prompt-suggestions button,
   .session-row, .send-button, .account-card .button-orange { transition: none !important; }
 }
+.chat-app[data-reduce-motion="true"] .chat-welcome-emblem .sonia-fold { transition: none !important; }
 .studio-site[data-motion="paused"] .studio-orbit-label > svg { animation-play-state: paused; }
 
 /* Warm ivory, charcoal ink. The original hero artwork stays intact. */

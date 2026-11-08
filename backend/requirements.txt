@@ -13,3 +13,4 @@ pyjwt[crypto]
 
 pillow>=11.0
 mcp
+redis>=5,<7

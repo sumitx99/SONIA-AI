@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field
 
 from app.core.auth import current_user
 from app.core.db import ensure_document_schema, get_pool, owned_document_ids
+from app.services.conversation_cache import (cache_conversations, get_cached_conversations,
+                                             invalidate_conversations)
 from app.services.images.image_storage import valid_chat_id
 from app.services.images.web_images import owned_images, attachment as web_attachment
 from app.services.images.image_storage import R2ImageStorage
@@ -108,6 +110,9 @@ class ConversationInput(BaseModel):
 
 @router.get("")
 async def list_conversations(user_id: str = Depends(current_user)):
+    cached = await get_cached_conversations(user_id)
+    if cached is not None:
+        return cached
     await ensure_conversation_schema()
     async with (await get_pool()).acquire() as conn:
         saved = await conn.fetch(
@@ -155,7 +160,9 @@ async def list_conversations(user_id: str = Depends(current_user)):
             for message in chat["messages"]:
                 message["web_images"] = [web_attachment(rows[image["image_id"]], storage)
                     for image in message.get("web_images", []) if image["image_id"] in rows]
-    return {"conversations": sorted(history.values(), key=lambda item: item["updatedAt"], reverse=True)}
+    response = {"conversations": sorted(history.values(), key=lambda item: item["updatedAt"], reverse=True)}
+    await cache_conversations(user_id, response)
+    return response
 
 
 @router.put("/{chat_id}")
@@ -186,6 +193,7 @@ async def save_conversation(chat_id: str, payload: ConversationInput, user_id: s
         """, user_id, chat_id, payload.title, messages)
     if updated is None:
         raise HTTPException(409, "This conversation was deleted")
+    await invalidate_conversations(user_id)
     return {"updatedAt": updated.isoformat()}
 
 
@@ -200,4 +208,5 @@ async def delete_conversation(chat_id: str, user_id: str = Depends(current_user)
             VALUES ($1, $2, 'Deleted conversation', now())
             ON CONFLICT(user_id, id) DO UPDATE SET deleted_at = now(), updated_at = now()
         """, user_id, chat_id)
+    await invalidate_conversations(user_id)
     return {"deleted": True}

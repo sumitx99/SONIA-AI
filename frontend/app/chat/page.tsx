@@ -28,12 +28,14 @@ import {
 import { Brand, Emblem } from "@/components/brand";
 import { AccountMenu } from "@/components/account/account-menu";
 import { DocumentImageGallery } from "@/components/chat/document-image";
+import { GeneratedImageGallery } from "@/components/chat/generated-images";
 import { WebImageGallery } from "@/components/chat/web-images";
 import { MarkdownMessage } from "@/components/chat/markdown-message";
 import { ToolCalls, WebSources } from "@/components/chat/tool-calls";
 import { streamMessage, uploadPDF, waitForDocumentImages, deleteConversation, handleApiError, type ImageAttachment,
   type ChatMessage as Message, type InlineGroundingCitation, type ToolCall } from "@/lib/api";
 import { applyInlineGroundingCitations } from "@/lib/markdown/inline-grounding";
+import { isImageUrl } from "@/lib/markdown/image-url";
 import { conversationHistory, editConversation } from "@/lib/chat-context";
 import { supabase } from "@/lib/supabase";
 import { useSession } from "@/lib/hooks/use-session";
@@ -239,6 +241,13 @@ export default function SoniaChatInterface() {
           start();
           setSessions(previous => previous.map(chat => chat.id === id ? { ...chat, messages: chat.messages.map(message =>
             message.id === answerId ? { ...message, notice: images.length ? null : message.notice, web_images: [...new Map([...(message.web_images ?? []), ...images].map(image => [image.image_id, image])).values()] } : message) } : chat));
+        },
+        onGeneratedImages: (images) => {
+          const responseImages = images.filter(image => image.src.startsWith("data:image/") || isImageUrl(image.src));
+          if (!responseImages.length) return;
+          start();
+          setSessions(previous => previous.map(chat => chat.id === id ? { ...chat, messages: chat.messages.map(message =>
+            message.id === answerId ? { ...message, generated_images: [...new Map([...(message.generated_images ?? []), ...responseImages].map(image => [image.src, image])).values()] } : message) } : chat));
         },
         onCitations: (answer, citations) => {
           rawText = answer;
@@ -547,7 +556,7 @@ export default function SoniaChatInterface() {
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.5 }}
               >
-                <Emblem />
+                <Emblem className="chat-welcome-emblem" />
                 <p className="eyebrow">YOUR DOCUMENTS. A NEW PERSPECTIVE.</p>
                 <h1>
                   Your next insight
@@ -618,6 +627,7 @@ export default function SoniaChatInterface() {
                       {message.notice && <p role="status" style={{ fontSize: 13, color: "var(--muted-foreground)" }}>{message.notice}</p>}
                       {message.images?.length ? <DocumentImageGallery images={message.images} /> : null}
                       {message.web_images?.length ? <WebImageGallery images={message.web_images} /> : null}
+                      {message.generated_images?.length ? <GeneratedImageGallery images={message.generated_images} /> : null}
                     </motion.article>
                   ))}
                 </AnimatePresence>

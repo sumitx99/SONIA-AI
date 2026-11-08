@@ -24,11 +24,27 @@ class ConversationTests(unittest.TestCase):
         self.pool = FakePool()
         self.schema = patch("app.api.conversations.ensure_conversation_schema", AsyncMock())
         self.pool_patch = patch("app.api.conversations.get_pool", AsyncMock(return_value=self.pool))
+        self.cache_read = patch("app.api.conversations.get_cached_conversations", AsyncMock(return_value=None))
+        self.cache_write = patch("app.api.conversations.cache_conversations", AsyncMock())
+        self.cache_invalidate = patch("app.api.conversations.invalidate_conversations", AsyncMock())
         self.schema.start()
         self.pool_patch.start()
+        self.cache_read_mock = self.cache_read.start()
+        self.cache_write_mock = self.cache_write.start()
+        self.cache_invalidate_mock = self.cache_invalidate.start()
         self.addCleanup(self.schema.stop)
         self.addCleanup(self.pool_patch.stop)
+        self.addCleanup(self.cache_read.stop)
+        self.addCleanup(self.cache_write.stop)
+        self.addCleanup(self.cache_invalidate.stop)
         self.now = datetime.now(timezone.utc)
+
+    def test_cached_history_skips_database_reads(self):
+        cached = {"conversations": [{"id": "chat-1", "title": "Cached", "messages": []}]}
+        self.cache_read_mock.return_value = cached
+        self.assertEqual(asyncio.run(list_conversations("user-1")), cached)
+        self.pool.conn.fetch.assert_not_called()
+        self.cache_write_mock.assert_not_awaited()
 
     def test_saved_history_and_previously_uploaded_documents_are_account_scoped(self):
         self.pool.conn.fetch.side_effect = [[
@@ -69,6 +85,7 @@ class ConversationTests(unittest.TestCase):
         self.assertNotIn("source_url", messages)
         self.assertIn("ON CONFLICT(user_id, id)", sql)
         self.assertIn("WHERE conversations.deleted_at IS NULL", sql)
+        self.cache_invalidate_mock.assert_awaited_once_with("user-1")
 
     def test_images_from_other_accounts_cannot_be_persisted(self):
         payload = ConversationInput(title="Not mine", messages=[{
@@ -110,3 +127,4 @@ class ConversationTests(unittest.TestCase):
         self.assertIn("deleted_at", sql)
         self.assertNotIn("DELETE FROM", sql)
         self.assertEqual((owner, chat), ("user-1", "chat-1"))
+        self.cache_invalidate_mock.assert_awaited_once_with("user-1")

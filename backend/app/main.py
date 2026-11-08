@@ -18,6 +18,7 @@ from app.api.web_images import router as web_images_router
 from app.core.db import close_pool
 from app.mcp_client.connections import router as mcp_connections_router
 from app.mcp_server.server import MCPMount, build_mcp_app
+from app.services.conversation_cache import close_conversation_cache
 from app.services.parsing.docling_utils import docling_enabled
 
 logging.basicConfig(level=logging.INFO)
@@ -56,6 +57,7 @@ async def lifespan(_app):
         finally:
             _mcp_mount.app = None
     await close_pool()
+    await close_conversation_cache()
 
 
 app = FastAPI(title="Sonia Advanced RAG API", lifespan=lifespan)

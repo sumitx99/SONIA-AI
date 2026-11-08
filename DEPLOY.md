@@ -43,6 +43,15 @@ The free service sleeps after 15 minutes idle; the first request after that take
 - Supabase → Authentication → URL Configuration: **Site URL** = your Vercel URL, and add
   `https://<your-site>/auth` to **Redirect URLs** (sign-up confirmation and password reset).
 
+## Optional Redis conversation-list cache
+
+The API can use Redis to cache each signed-in account's conversation-list response for 30 seconds.
+Chat saves/deletes and successfully indexed document uploads invalidate that account's entry. Without
+`REDIS_URL`, or when Redis is unavailable, requests continue to use Postgres normally. To enable it,
+provision a Redis-compatible service and set its private connection URL as `REDIS_URL` in the API
+service's environment. The cached response contains private chat history, so use a trusted Redis
+provider and keep the connection URL secret. This repository does not provision Redis automatically.
+
 ## Before real users
 
 - Rotate any key that has been shared outside your machine (R2 token, DB password, Gemini key).

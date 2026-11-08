@@ -13,8 +13,16 @@ function loadTypeScript(path, imports = {}) {
   return module.exports;
 }
 const noImages = loadTypeScript('../lib/markdown/remark-no-images.ts').default;
+const { isImageUrl } = loadTypeScript('../lib/markdown/image-url.ts');
 const image = () => ({ type: 'image', url: 'invented.png', alt: 'Figure 1' });
 const text = (value) => ({ type: 'text', value });
+
+test('only standard image URLs are accepted for generated_images events', () => {
+  assert.equal(isImageUrl('https://i0.nekobot.xyz/4/d/b/1d7493e0bceea91f53406738e9065.jpg'), true);
+  assert.equal(isImageUrl('https://cdn.example.test/generated.webp?token=x'), true);
+  assert.equal(isImageUrl('https://example.test/article'), false);
+  assert.equal(isImageUrl('javascript:alert(1)'), false);
+});
 
 test('model images and an image-only table are removed, prose is preserved', () => {
   const root = { type: 'root', children: [
@@ -251,11 +259,13 @@ test('an SSE error after partial text is reported as a cut-off answer', async(t)
 const webActivity = loadTypeScript('../lib/web-activity.ts');
 test('web image attachments stream separately and keep image-search status', async(t)=>{
  const image={image_id:'a'.repeat(64),title:'Bridge',source_url:'https://commons.wikimedia.org/wiki/File:Bridge.jpg',url:'https://r2.example/signed',license:'CC BY-SA 4.0'};
- const events=[['web_images',{images:[image]}],['delta',{text:'Image found.'}],['done',{}]];
+ const generated={src:'https://images.example.test/generated.webp',alt:'Generated image'};
+ const events=[['web_images',{images:[image]}],['generated_images',{images:[generated]}],['delta',{text:'Image found.'}],['done',{}]];
  t.mock.method(globalThis,'fetch',async()=>new Response(events.map(([name,data])=>`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`).join(''),{headers:{'Content-Type':'text/event-stream'}}));
- let received;
- await client().streamMessage('Show a bridge photo',[],{onDelta:()=>{},onWebImages:images=>received=images});
+ let received, receivedGenerated;
+ await client().streamMessage('Show a bridge photo',[],{onDelta:()=>{},onWebImages:images=>received=images,onGeneratedImages:images=>receivedGenerated=images});
  assert.deepEqual(received,[image]);
+ assert.deepEqual(receivedGenerated,[generated]);
  const [card]=webActivity.publicToolCalls([{id:'images1',server:'Web',tool:'image_search',title:'Searching web images',status:'running'}]);
  assert.equal(card.title,'Searching web images');
 });
@@ -298,6 +308,14 @@ test('activity follows real tool lifecycle and keeps JSON inside collapsed Detai
   assert.match(renderActivity([done], true), /Complete.*Preparing answer/s);
   assert.doesNotMatch(renderActivity([done], false), /Preparing answer/);
   assert.doesNotMatch(renderActivity([done, { ...jobStep, id: 'jobs-2' }], true), /Preparing answer/);
+});
+
+test('image URL remains activity text and is not rendered as an image from Details', () => {
+  const url = 'https://i0.nekobot.xyz/4/d/b/1d7493e0bceea91f53406738e9065.jpg';
+  const rendered = renderActivity([{ id: 'image-tool', server: 'Generator', tool: 'generate', title: 'Generate image',
+    status: 'done', summary: `{"success":true,"url":"${url}"}` }]);
+  assert.ok(rendered.includes(url));
+  assert.doesNotMatch(rendered, /<img/);
 });
 
 test('activity distinguishes approval, failure, decline and stop without fake success', () => {
