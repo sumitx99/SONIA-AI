@@ -1,5 +1,9 @@
 .activity { max-width:620px; margin:6px 0 18px 31px; font-size:12px; }
-.heading { margin:0 0 10px; font-size:11px; font-weight:600; color:var(--muted-foreground); }
+.heading { display:flex; align-items:center; gap:5px; width:fit-content; margin:0 0 10px; font-size:11px; font-weight:600; color:var(--citron); cursor:pointer; list-style:none; }
+.heading::-webkit-details-marker { display:none; }
+.heading svg { transition:transform .15s ease; }
+.activity[open] > .heading svg { transform:rotate(180deg); }
+.heading:focus-visible { outline:2px solid var(--ring); outline-offset:3px; border-radius:2px; }
 .steps { list-style:none; margin:0; padding:0; }
 .step { position:relative; display:flex; align-items:flex-start; gap:10px; padding:0 0 14px; }
 .step:not(:last-child)::before { content:""; position:absolute; left:10px; top:23px; bottom:2px; width:1px; background:var(--line); }

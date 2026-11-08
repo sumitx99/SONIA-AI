@@ -74,6 +74,14 @@ export interface WebSource {
   url: string;
 }
 
+/** A Google-grounded answer segment linked to its supporting web page during generation. */
+export interface InlineGroundingCitation {
+  /** UTF-16 offset immediately after the supported segment in the streamed answer. */
+  position: number;
+  title: string;
+  url: string;
+}
+
 /** A numbered citation in an answer; `verified` means its quote was found in the source. */
 export interface Citation {
   n: number;
@@ -339,6 +347,8 @@ export interface StreamHandlers {
   onToolCall?: (call: ToolCall) => void;
   /** Web pages the answer used, once at the end. */
   onSources?: (sources: WebSource[]) => void;
+  /** Provider-supplied claim/source mapping, delivered as soon as grounding metadata arrives. */
+  onInlineCitation?: (citation: InlineGroundingCitation) => void;
   onWebImages?: (images: WebImage[]) => void;
   /** The final answer text (without its citations block) and its checked citations, at the end. */
   onCitations?: (answer: string, citations: Citation[]) => void;
@@ -403,6 +413,7 @@ export const streamMessage = async (
       if (event === "meta") handlers.onMeta?.(payload);
       else if (event === "tool_call") handlers.onToolCall?.(payload);
       else if (event === "sources") handlers.onSources?.(payload.sources);
+      else if (event === "inline_citation") handlers.onInlineCitation?.(payload);
       else if (event === "web_images") handlers.onWebImages?.(payload.images);
       else if (event === "citations") handlers.onCitations?.(payload.answer, payload.citations);
       else if (event === "delta") {

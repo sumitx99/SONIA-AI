@@ -239,6 +239,15 @@ test('web activity and sources reach the UI before answer text',async(t)=>{
  assert.deepEqual(received,['running','https://ai.google.dev/pricing','done','answer']);
 });
 
+test('an SSE error after partial text is reported as a cut-off answer', async(t)=>{
+ const events=[['delta',{text:'Partial answer'}],['error',{detail:'The answer reached its output limit.'}]];
+ t.mock.method(globalThis,'fetch',async()=>new Response(events.map(([name,data])=>`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`).join(''),{headers:{'Content-Type':'text/event-stream'}}));
+ let answer='';
+ const result=await client().streamMessage('question',[],{onDelta:piece=>answer+=piece});
+ assert.equal(answer,'Partial answer');
+ assert.deepEqual(result,{cutOff:true});
+});
+
 const webActivity = loadTypeScript('../lib/web-activity.ts');
 test('web image attachments stream separately and keep image-search status', async(t)=>{
  const image={image_id:'a'.repeat(64),title:'Bridge',source_url:'https://commons.wikimedia.org/wiki/File:Bridge.jpg',url:'https://r2.example/signed',license:'CC BY-SA 4.0'};
@@ -281,8 +290,10 @@ test('activity follows real tool lifecycle and keeps JSON inside collapsed Detai
   assert.match(running, /JSearch Jobs/);
   assert.match(running, /In progress/);
   assert.match(running, /<ol/);
+  assert.match(running, /<details[^>]*open=""/);
+  assert.match(running, /<summary[^>]*>Activity <svg/);
   assert.match(running, /<details[^>]*><summary>Details/);
-  assert.doesNotMatch(running, /<details[^>]*\bopen\b|Preparing answer|MCP ·|>Running</);
+  assert.doesNotMatch(running, /Preparing answer|MCP ·|>Running</);
   const done = { ...jobStep, status: 'done' };
   assert.match(renderActivity([done], true), /Complete.*Preparing answer/s);
   assert.doesNotMatch(renderActivity([done], false), /Preparing answer/);
@@ -302,10 +313,34 @@ test('activity distinguishes approval, failure, decline and stop without fake su
   }
   const stoppedWeb = webActivity.publicToolCalls([{ ...jobStep, server: 'Web', status: 'stopped' }]);
   assert.equal(stoppedWeb[0].title, 'Web search stopped');
-  assert.equal(renderActivity([], true), '');
+  assert.match(renderActivity([], true), /Activity.*Preparing answer/s);
+  assert.equal(renderActivity([], false), '');
 });
 
 const remarkCitations = loadTypeScript('../lib/markdown/remark-citations.ts').default;
+const { applyInlineGroundingCitations } = loadTypeScript('../lib/markdown/inline-grounding.ts');
+
+test('grounding annotations become inline source links at UTF-16 answer offsets', () => {
+  const answer = '💼 Zscaler offers hybrid roles.';
+  const position = answer.length;
+  const linked = applyInlineGroundingCitations(answer, [
+    { position, title: 'Zscaler careers', url: 'https://zscaler.example/careers' },
+    { position, title: 'Zscaler careers', url: 'https://zscaler.example/careers' },
+  ]);
+  assert.equal(linked, '💼 Zscaler offers hybrid roles. [↗](<https://zscaler.example/careers> "sonia-grounding:Zscaler%20careers")');
+  assert.equal(applyInlineGroundingCitations(answer, [
+    { position, title: 'Unsafe', url: 'javascript:alert(1)' },
+  ]), answer);
+});
+
+test('grounding source title is available on hover and keyboard focus', () => {
+  const renderer = readFileSync(new URL('../components/chat/markdown-message.tsx', import.meta.url), 'utf8');
+  const styles = readFileSync(new URL('../components/chat/citation-marker.module.css', import.meta.url), 'utf8');
+  assert.match(renderer, /data-source-title=\{sourceTitle\}/);
+  assert.match(styles, /\.groundingLink:hover::after,\s*\.groundingLink:focus-visible::after/);
+  assert.match(styles, /content:\s*attr\(data-source-title\)/);
+});
+
 test('citation markers become numbered superscripts, but not inside code or links', () => {
   const root = { type: 'root', children: [
     { type: 'paragraph', children: [text('BLEU was 28.4 [1][2].'), { type: 'inlineCode', value: 'arr[1]' },
@@ -322,11 +357,16 @@ test('citation markers become numbered superscripts, but not inside code or link
 
 test('the stream hands over the final answer and its checked citations', async (t) => {
   const citation = { n: 1, kind: 'web', title: 'Pricing', quote: 'costs $0.25', verified: true, url: 'https://x.example' };
+  const inline = { position: 20, title: 'Pricing page', url: 'https://x.example/pricing' };
   const events = [['delta', { text: 'It costs $0.25 [1].\n\n```citations\n[]\n```' }],
+                  ['inline_citation', inline],
                   ['citations', { answer: 'It costs $0.25 [1].', citations: [citation] }], ['done', {}]];
   t.mock.method(globalThis, 'fetch', async () => new Response(events.map(([name, data]) => `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`).join(''),
     { headers: { 'Content-Type': 'text/event-stream' } }));
   let final;
-  await client().streamMessage('price', [], { onDelta: () => {}, onCitations: (answer, citations) => { final = { answer, citations }; } });
+  let streamedInline;
+  await client().streamMessage('price', [], { onDelta: () => {}, onInlineCitation: (value) => { streamedInline = value; },
+    onCitations: (answer, citations) => { final = { answer, citations }; } });
   assert.deepEqual(final, { answer: 'It costs $0.25 [1].', citations: [citation] });
+  assert.deepEqual(streamedInline, inline);
 });

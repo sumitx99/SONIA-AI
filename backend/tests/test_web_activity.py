@@ -36,6 +36,59 @@ class WebActivityTests(unittest.TestCase):
         self.assertNotIn('Private reasoning',str(events))
         self.assertTrue(any(e[0]=='tool_call' and e[1]['tool']=='url_context' for e in events))
 
+    def test_grounding_support_emits_live_inline_source_for_supported_text(self):
+        answer = '💼 Zscaler offers hybrid roles.'
+        segment = 'Zscaler offers hybrid roles.'
+        chunks = [
+            {'web': {'uri': 'https://first.example/jobs', 'title': 'First source'}},
+            {'web': {'uri': 'https://zscaler.example/careers', 'title': 'Zscaler careers'}},
+        ]
+        metadata = {
+            'groundingChunks': [chunks[0]],
+            'groundingSupports': [],
+        }
+        support = {
+            'segment': {'text': segment, 'partIndex': 0,
+                        'startIndex': len('💼 '.encode('utf-8')),
+                        'endIndex': len(answer.encode('utf-8'))},
+            'groundingChunkIndices': [1],
+        }
+        metadata_after_next_stream_chunk = {
+            'groundingChunks': [chunks[1]],
+            'groundingSupports': [support],
+        }
+        parts = [{'text': answer}, {'groundingMetadata': metadata},
+                 {'groundingMetadata': metadata_after_next_stream_chunk}]
+
+        async def run():
+            return [event async for event in agent.answer_with_tools('user1', 'Find hybrid roles', '', [], {})]
+
+        with patch.object(agent, 'stream_gemini_parts', return_value=iter(parts)):
+            events = asyncio.run(run())
+        citations = [data for name, data in events if name == 'inline_citation']
+        self.assertEqual(citations, [{'position': len(answer.encode('utf-16-le')) // 2,
+                                      'title': 'Zscaler careers',
+                                      'url': 'https://zscaler.example/careers'}])
+        self.assertLess(next(i for i, event in enumerate(events) if event[0] == 'delta'),
+                        next(i for i, event in enumerate(events) if event[0] == 'inline_citation'))
+
+    def test_ambiguous_grounding_segment_is_not_attached_to_the_wrong_occurrence(self):
+        segment = 'The role is hybrid.'
+        parts = [
+            {'text': f'{segment} {segment}'},
+            {'groundingMetadata': {
+                'groundingChunks': [{'web': {'uri': 'https://jobs.example/role', 'title': 'Role'}}],
+                'groundingSupports': [{'segment': {'text': segment}, 'groundingChunkIndices': [0]}],
+            }},
+        ]
+
+        async def run():
+            return [event async for event in agent.answer_with_tools('user1', 'Find a role', '', [], {})]
+
+        with patch.object(agent, 'stream_gemini_parts', return_value=iter(parts)):
+            events = asyncio.run(run())
+        self.assertFalse(any(name == 'inline_citation' for name, _ in events))
+
     def test_no_fake_search_for_plain_answer(self):
         async def run(): return [event async for event in agent.answer_with_tools('user1','Hello','',[],{})]
         with patch.object(agent,'stream_gemini_parts',return_value=iter([{'text':'Hello'}])):

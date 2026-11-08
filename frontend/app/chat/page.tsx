@@ -32,7 +32,8 @@ import { WebImageGallery } from "@/components/chat/web-images";
 import { MarkdownMessage } from "@/components/chat/markdown-message";
 import { ToolCalls, WebSources } from "@/components/chat/tool-calls";
 import { streamMessage, uploadPDF, waitForDocumentImages, deleteConversation, handleApiError, type ImageAttachment,
-  type ChatMessage as Message, type ToolCall } from "@/lib/api";
+  type ChatMessage as Message, type InlineGroundingCitation, type ToolCall } from "@/lib/api";
+import { applyInlineGroundingCitations } from "@/lib/markdown/inline-grounding";
 import { conversationHistory, editConversation } from "@/lib/chat-context";
 import { supabase } from "@/lib/supabase";
 import { useSession } from "@/lib/hooks/use-session";
@@ -193,7 +194,9 @@ export default function SoniaChatInterface() {
     setPending({ id, kind: "answer" });
     const answerId = crypto.randomUUID();
     let meta: { images?: ImageAttachment[]; image_notice?: string | null } = {};
+    let rawText = "";
     let text = "";
+    const inlineCitations: InlineGroundingCitation[] = [];
     let started = false;
     let toolCalls: ToolCall[] = [];
     const update = (changes: Partial<Message>) =>
@@ -213,7 +216,8 @@ export default function SoniaChatInterface() {
         onMeta: (received) => { meta = received; },
         onDelta: (piece) => {
           start();
-          text += piece;
+          rawText += piece;
+          text = applyInlineGroundingCitations(rawText, inlineCitations);
           update({ content: text });
         },
         onToolCall: (call) => {
@@ -225,14 +229,21 @@ export default function SoniaChatInterface() {
           update({ tool_calls: toolCalls });
         },
         onSources: (sources) => { start(); update({ sources }); },
+        onInlineCitation: (citation) => {
+          start();
+          inlineCitations.push(citation);
+          text = applyInlineGroundingCitations(rawText, inlineCitations);
+          update({ content: text });
+        },
         onWebImages: (images) => {
           start();
           setSessions(previous => previous.map(chat => chat.id === id ? { ...chat, messages: chat.messages.map(message =>
             message.id === answerId ? { ...message, notice: images.length ? null : message.notice, web_images: [...new Map([...(message.web_images ?? []), ...images].map(image => [image.image_id, image])).values()] } : message) } : chat));
         },
         onCitations: (answer, citations) => {
-          text = answer;
-          update({ content: answer, citations });
+          rawText = answer;
+          text = applyInlineGroundingCitations(rawText, inlineCitations);
+          update({ content: text, citations });
         },
       }, conversationHistory(before), controller.signal);
       controller.signal.throwIfAborted();
@@ -362,7 +373,7 @@ export default function SoniaChatInterface() {
       !event.nativeEvent.isComposing
     ) {
       event.preventDefault();
-      void ask(undefined, canResume);
+      void ask();
     }
   }
 
@@ -628,12 +639,6 @@ export default function SoniaChatInterface() {
             <div ref={end} />
           </div>
           <div className="composer-area">
-            {resumeAvailable && <div className="answer-resume" role="status">
-              <span>Answer stopped.</span>
-              <button type="button" onClick={() => void ask(undefined, true)}>
-                <Play size={13} aria-hidden="true" /> Resume answer
-              </button>
-            </div>}
             {!!current?.documents.length && (
               <div className="document-chips">
                 {current.documents.map((name, index) => (
@@ -649,7 +654,7 @@ export default function SoniaChatInterface() {
               className="chat-composer"
               onSubmit={(event) => {
                 event.preventDefault();
-                void ask(undefined, canResume);
+                void ask();
               }}
             >
               <label className="sr-only" htmlFor="question">
@@ -675,16 +680,24 @@ export default function SoniaChatInterface() {
                   <Paperclip size={16} />
                   <span>Add a PDF</span>
                 </button>
-                <span className="composer-hint mono">{answeringHere ? "ANSWERING…" : pending?.kind === "upload" ? "UPLOADING PDF…" : canResume ? "ENTER TO RESUME" : "ENTER TO SEND"}</span>
+                <span className="composer-hint mono">{answeringHere ? "ANSWERING…" : pending?.kind === "upload" ? "UPLOADING PDF…" : canResume ? "RESUME ANSWER" : "ENTER TO SEND"}</span>
                 <button
+                  key={composerAction}
                   className="send-button"
                   data-action={composerAction}
-                  type={answeringHere ? "button" : "submit"}
+                  type="button"
                   aria-label={composerActionLabel}
-                  onClick={answeringHere ? () => answerController.current?.abort() : undefined}
+                  onClick={(event) => {
+                    // Never let a Stop click turn into a native form submission when
+                    // abort settles and React renders the Resume button in its place.
+                    event.preventDefault();
+                    if (answeringHere) answerController.current?.abort();
+                    else if (canResume) void ask(undefined, true);
+                    else void ask();
+                  }}
                   disabled={!answeringHere && ((!input.trim() && !canResume) || !!pending || !!generatingId || !historyLoaded)}
                 >
-                  {answeringHere ? <span className="composer-stop-mark" aria-hidden="true" /> : canResume ? <Play size={16} fill="currentColor" aria-hidden="true" /> : <ArrowUp size={20} aria-hidden="true" />}
+                  {answeringHere ? <span className="composer-stop-mark" aria-hidden="true" /> : canResume ? <Play size={18} fill="currentColor" aria-hidden="true" /> : <ArrowUp size={20} aria-hidden="true" />}
                   <span className="composer-action-tooltip" aria-hidden="true">{composerActionLabel}</span>
                 </button>
               </div>

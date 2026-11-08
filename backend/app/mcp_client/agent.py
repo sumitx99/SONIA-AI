@@ -35,9 +35,14 @@ MAX_ROUNDS = 5
 MAX_TOOLS = 64
 MAX_SOURCES = 10
 MAX_DIRECT_PAGES = 3
+MAX_OUTPUT_CONTINUATIONS = 1
 APPROVAL_TIMEOUT = 120
 # approval id -> (user id, future resolved with True/False). One API instance, so in memory.
 _approvals: dict[str, tuple[str, asyncio.Future]] = {}
+
+
+class IncompleteAnswerError(RuntimeError):
+    """The model exhausted its output budget even after the one allowed continuation."""
 
 
 def resolve_approval(user_id: str, approval_id: str, approved: bool) -> bool:
@@ -138,21 +143,55 @@ def _add_sources(grounding: dict, sources: dict) -> None:
             sources[url] = {"title": (web.get("title") or url)[:200], "url": url[:2048]}
 
 
+def _utf16_length(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _grounding_annotations(grounding: dict, chunks: list, round_text: str,
+                           answer_start: int) -> list[dict]:
+    """Map Gemini's supported response segments to safe web links and answer offsets."""
+    annotations = []
+    for support in grounding.get("groundingSupports") or []:
+        segment = support.get("segment") or {}
+        segment_text = segment.get("text")
+        if not isinstance(segment_text, str) or not segment_text:
+            continue
+
+        # Match the exact returned segment in the visible answer. If it occurs more
+        # than once, skip it rather than risk attaching a source to the wrong claim.
+        start_char = round_text.find(segment_text)
+        if start_char < 0 or round_text.find(segment_text, start_char + 1) >= 0:
+            continue
+
+        position = answer_start + _utf16_length(round_text[:start_char + len(segment_text)])
+        for index in support.get("groundingChunkIndices") or []:
+            if not isinstance(index, int) or index < 0 or index >= len(chunks):
+                continue
+            web = chunks[index].get("web") or {}
+            url = safe_url(web.get("uri"))
+            if url:
+                annotations.append({"position": position, "title": (web.get("title") or url)[:200],
+                                    "url": url[:2048]})
+    return annotations
+
+
 async def answer_with_tools(user_id: str, query: str, context: str, declarations: list, registry: dict, history=None):
     """Yields (event, data) while answering; text arrives as "delta" events."""
     contents = conversation_turns(query, context, history)
     sources: dict[str, dict] = {}
+    answer_text = ""
     question_urls = requested_urls(query)
     attempted_pages = set()
     web = WebActivity()
     image_searches, image_count = 0, 0
     backend = {"backup": False}
+    continuations = 0
 
     def iterate_model_parts(offered):
         # Sonia's own tools (not from a connection) stay on offer when the backup shortlists.
         app_tools = [tool["name"] for tool in offered if tool not in declarations]
         if backend["backup"]:
-            yield from stream_tool_backup(contents, offered, allow_web=round_number < MAX_ROUNDS,
+            yield from stream_tool_backup(contents, offered, allow_web=not contents.final_answer_only,
                                          app_tools=app_tools)
             return
         generated = False
@@ -170,29 +209,46 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
                 raise
             backend["backup"] = True
             # Keep the connected tools; their execution and approvals remain in this loop.
-            yield from stream_tool_backup(contents, offered, allow_web=round_number < MAX_ROUNDS,
+            yield from stream_tool_backup(contents, offered, allow_web=not contents.final_answer_only,
                                          app_tools=app_tools)
-    for round_number in range(MAX_ROUNDS + 1):
-        # The last round offers no tools, so the model has to answer with what it has. While
-        # Google Search is paused, web search runs through the web_search tool instead.
+    for round_number in range(MAX_ROUNDS + MAX_OUTPUT_CONTINUATIONS + 1):
+        # Final and continuation rounds offer no tools; continuation reuses prior results.
         offered = []
-        contents.final_answer_only = round_number == MAX_ROUNDS
-        if round_number < MAX_ROUNDS:
+        contents.final_answer_only = round_number >= MAX_ROUNDS or continuations > 0
+        if not contents.final_answer_only:
             offered = declarations + ([WEB_SEARCH_TOOL]
                                       if (question_urls or not google_search_ready()) and web_search_available() else [])
             if URL_CONTEXT and question_urls - attempted_pages and len(attempted_pages) < MAX_DIRECT_PAGES:
                 offered = offered + [READ_WEB_PAGE_TOOL]
             if image_search_configured() and image_searches < 2 and image_count < 3:
                 offered = offered + [IMAGE_SEARCH_TOOL]
-        model_parts, calls, search_refused = [], [], False
+        model_parts, calls, search_refused, finish_reason = [], [], False, None
+        round_start = _utf16_length(answer_text)
+        grounding_chunks = []
+        emitted_grounding = set()
         try:
             async for part in iterate_in_threadpool(iterate_model_parts(offered)):
+                if "finishReason" in part:
+                    finish_reason = part["finishReason"]
+                    logger.info("Model generation finished with reason=%s", finish_reason)
+                    continue
                 if "searchUnavailable" in part:
                     search_refused = True
                     continue
                 if "groundingMetadata" in part:
                     grounding = part["groundingMetadata"]
+                    grounding_chunks.extend(grounding.get("groundingChunks") or [])
                     _add_sources(grounding, sources)
+                    round_text = "".join(
+                        item.get("text", "") for item in model_parts
+                        if item.get("text") and not item.get("thought")
+                    )
+                    for annotation in _grounding_annotations(grounding, grounding_chunks,
+                                                            round_text, round_start):
+                        key = (annotation["position"], annotation["url"])
+                        if key not in emitted_grounding:
+                            emitted_grounding.add(key)
+                            yield "inline_citation", annotation
                     queries = grounding.get("webSearchQueries") or []
                     if queries and not any(call["tool"] == "google_search" for call in web.calls.values()):
                         yield "tool_call", {"id": f"web-grounding-{round_number}", "server": "Web", "tool": "google_search",
@@ -225,6 +281,7 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
                     part["functionCall"].setdefault("id", uuid.uuid4().hex)
                     calls.append(part["functionCall"])
                 elif part.get("text") and not part.get("thought"):
+                    answer_text += part["text"]
                     yield "delta", {"text": part["text"]}
         except requests.HTTPError as error:
             # Gemini rejects the whole request when one connected tool's schema is invalid. That
@@ -249,7 +306,20 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
             yield "tool_call", event
         if search_refused:
             continue  # nothing was generated; ask again with the web_search tool on offer
-        if not calls or contents.final_answer_only:
+        if not calls:
+            if finish_reason == "MAX_TOKENS":
+                if continuations >= MAX_OUTPUT_CONTINUATIONS:
+                    raise IncompleteAnswerError("The answer reached the output limit after one continuation.")
+                if model_parts:
+                    contents.append({"role": "model", "parts": model_parts})
+                contents.append({"role": "user", "parts": [{"text":
+                    "The previous answer reached the output limit. Continue from where it stopped without "
+                    "repeating completed text or rerunning tools. Complete the answer and any citations."}]})
+                continuations += 1
+                logger.warning("Gemini answer reached MAX_TOKENS; requesting one continuation")
+                continue
+            break
+        if contents.final_answer_only:
             break
         contents.append({"role": "model", "parts": model_parts})
         responses = []

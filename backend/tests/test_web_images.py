@@ -83,9 +83,19 @@ class WebImagesTests(unittest.TestCase):
         pool, storage = FakePool(), Mock()
         pool.conn.fetchrow.side_effect = [None, RuntimeError("DB down")]
         storage.upload.return_value = "new-key"
-        with patch.object(images, "ensure_schema", AsyncMock()), patch.object(images, "get_pool", AsyncMock(return_value=pool)), \
-             patch.object(images, "read_public_resource", return_value=(png(), "image/png")):
+        with (
+            patch.object(images, "ensure_schema", AsyncMock()),
+            patch.object(images, "get_pool", AsyncMock(return_value=pool)),
+            patch.object(images, "read_public_resource", return_value=(png(), "image/png")),
+            patch.object(images, "preview_image", return_value=(b"webp-preview", 100, 60)),
+        ):
             with self.assertRaises(RuntimeError): asyncio.run(images.store_candidate("user-1", CANDIDATE, storage))
+        upload_args = storage.upload.call_args.args
+        self.assertEqual(len(upload_args), 3)
+        self.assertTrue(upload_args[0].startswith("users/user-1/web-images/"))
+        self.assertEqual(upload_args[1]["extension"], "webp")
+        self.assertEqual(upload_args[1]["content_type"], "image/webp")
+        self.assertEqual(upload_args[2], b"webp-preview")
         storage.delete.assert_called_once_with("new-key")
 
     def test_failed_signing_does_not_delete_committed_object(self):

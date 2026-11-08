@@ -17,6 +17,49 @@
 }
 button.marker:hover { border-color: #b9a88f; background: #ebe1cf; }
 button.marker:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.groundingLink {
+  position: relative;
+  display: inline-block;
+  margin-left: 2px;
+  color: var(--citron);
+  font-size: 10px;
+  font-weight: 700;
+  text-decoration: none;
+}
+.groundingLink::after {
+  content: attr(data-source-title);
+  position: absolute;
+  z-index: 80;
+  bottom: calc(100% + 7px);
+  left: 50%;
+  width: max-content;
+  max-width: min(280px, calc(100vw - 32px));
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--card);
+  box-shadow: 0 6px 18px rgb(41 40 38 / 0.16);
+  color: var(--foreground);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translate(-50%, 3px);
+  transition: opacity .12s ease, transform .12s ease, visibility .12s ease;
+}
+.groundingLink:hover { text-decoration: underline; }
+.groundingLink:hover::after,
+.groundingLink:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0);
+}
+.groundingLink:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
 .unverified { border-color: #e2b4a8; background: #fbece7; color: #a13c2b; }
 .unchecked { border-color: #d4d1cb; background: #f1f0ed; color: #6f6b64; }
 .pending { opacity: 0.6; cursor: default; }

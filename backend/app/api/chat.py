@@ -69,7 +69,8 @@ async def chat_stream(query: str = Form(...), document_ids: list[int] | None = F
                       user_id: str = Depends(current_user), history: str | None = Form(None)):
     """Like /chat, but streams the answer as server-sent events while Gemini writes it.
 
-    Events: `meta` (images and status, once), `delta` ({"text"}, repeatedly), `citations`
+    Events: `meta` (images and status, once), `delta` ({"text"}, repeatedly), `inline_citation`
+    (a provider-grounded answer segment and source link, as grounding metadata arrives), `citations`
     ({"answer", "citations"}: the final text without its citations block, and each checked
     citation), then `done`, or `error` ({"detail"}) if the answer breaks off part-way. The model
     may read web pages, listed in `sources` events. With MCP connections it may also call tools, reported as

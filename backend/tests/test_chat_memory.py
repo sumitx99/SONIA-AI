@@ -7,6 +7,7 @@ from app.api import chat
 from app.core.auth import current_user
 from app.services.chat_memory import parse_history
 from app.services.llm import _request_body
+from app.mcp_client.agent import IncompleteAnswerError
 
 HISTORY = [{'sender':'user','content':'Compare CNN and RNN accuracy in a chart.'}, {'sender':'bot','content':'Please supply numbers for CNN and RNN.'}]
 
@@ -41,6 +42,22 @@ class MemoryTests(unittest.TestCase):
         self.assertIn('event: done',reply.text)
         self.assertEqual(captured[0][0][0],'user-1')
         self.assertEqual(captured[0][1]['history'],HISTORY)
+
+    def test_incomplete_answer_emits_error_not_done_after_partial_text(self):
+        async def answer(*args, **kwargs):
+            yield 'delta', {'text': 'Partial answer'}
+            raise IncompleteAnswerError('output limit reached')
+
+        with patch.object(chat, 'answer_context', AsyncMock(return_value=('ctx', {}))):
+            with patch.object(chat, 'available_tools', AsyncMock(return_value=([], {}))):
+                with patch.object(chat, 'answer_with_tools', answer):
+                    reply = self.client.post('/chat/stream', data={'query': 'q'})
+
+        self.assertEqual(reply.status_code,200)
+        self.assertIn('event: delta',reply.text)
+        self.assertIn('Partial answer',reply.text)
+        self.assertIn('event: error',reply.text)
+        self.assertNotIn('event: done',reply.text)
 
     def test_invalid_history_fails_before_retrieval(self):
         with patch.object(chat,'answer_context',AsyncMock()) as retrieve:

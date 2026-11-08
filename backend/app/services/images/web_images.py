@@ -148,8 +148,8 @@ async def store_candidate(user_id, candidate, storage):
     image_id = hashlib.sha256(preview).hexdigest()
     # Unique upload key makes cleanup safe even when concurrent searches find the same image.
     prefix = f"users/{user_id}/web-images/{uuid.uuid4().hex}"
-    key = await asyncio.to_thread(storage.upload, prefix, {"image_id": image_id, "extension": "webp",
-        "content_type": "image/webp", "data": preview})
+    image_metadata = {"image_id": image_id, "extension": "webp", "content_type": "image/webp"}
+    key = await asyncio.to_thread(storage.upload, prefix, image_metadata, preview)
     metadata = {field: value for field, value in candidate.items() if field != "download_url"}
     metadata.update(width=width, height=height, preview_note="Resized WebP preview")
     try:

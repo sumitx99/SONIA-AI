@@ -261,13 +261,11 @@
 .chat-app .document-chips span { background:#eee; border-color:#ddd; color:#555; }
 
 /* One composer control switches between send, stop and continue. */
-.answer-resume { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px; font-size:13px; color:var(--muted-foreground); }
-.answer-resume button { display:inline-flex; align-items:center; gap:6px; padding:7px 12px; border:1px solid var(--line); border-radius:7px; background:var(--card); color:var(--foreground); }
-.answer-resume button:hover { background:#eee; }
-.answer-resume button:focus-visible { outline:2px solid var(--ring); outline-offset:2px; }
 .chat-app .send-button[data-action] { position:relative; width:40px; height:40px; flex-shrink:0; border-radius:50%; box-shadow:0 2px 5px #2220000d; transition:background .2s, box-shadow .2s, transform .2s; }
 .chat-app .send-button[data-action="stop"], .chat-app .send-button[data-action="resume"] { background:#282d29; color:#fafbf6; border:1px solid #414a3e; box-shadow:inset 0 0 0 4px #ffffff0c, 0 2px 6px #22200012; }
 .chat-app .send-button[data-action="stop"]:hover:not(:disabled), .chat-app .send-button[data-action="resume"]:hover:not(:disabled) { background:#3d4738; box-shadow:inset 0 0 0 4px #ffffff10, 0 3px 9px #22200020; }
+.chat-app .send-button[data-action="resume"] { background:#2dc595; border-color:#e14035; box-shadow:none; color:#fff; }
+.chat-app .send-button[data-action="resume"]:hover:not(:disabled) { background:#ba561c; box-shadow:none; }
 .composer-stop-mark { width:11px; height:11px; border-radius:2px; background:currentColor; }
 .chat-app .send-button[data-action="resume"] > svg { margin-left:2px; }
 .chat-app .send-button[data-action]:focus-visible { outline:2px solid #7c8969; outline-offset:3px; }

@@ -63,11 +63,11 @@ function ApprovalCard({ call }: { call: ToolCall }) {
 /** The tools Sonia used for an answer, and approval prompts for ones that need consent. */
 export function ToolCalls({ calls: rawCalls, streaming = false }: { calls?: ToolCall[]; streaming?: boolean }) {
   const calls = publicToolCalls(rawCalls);
-  if (!calls.length) return null;
+  if (!calls.length && !streaming) return null;
   const preparing = streaming && calls.every(call => call.status !== "running" && call.status !== "awaiting_approval");
   return (
-    <section className={styles.activity} aria-label="Answer activity" aria-live="polite" aria-relevant="additions text">
-      <p className={styles.heading}>Activity</p>
+    <details className={styles.activity} aria-label="Answer activity" aria-live="polite" aria-relevant="additions text" open>
+      <summary className={styles.heading}>Activity <ChevronDown size={13} aria-hidden /></summary>
       <ol className={styles.steps}>
         {calls.map(call => {
           const { Icon, label } = STATUS[call.status];
@@ -98,7 +98,7 @@ export function ToolCalls({ calls: rawCalls, streaming = false }: { calls?: Tool
           <span className={styles.title}>Preparing answer…</span>
         </li>}
       </ol>
-    </section>
+    </details>
   );
 }
 

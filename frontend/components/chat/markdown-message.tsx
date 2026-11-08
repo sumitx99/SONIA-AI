@@ -12,6 +12,7 @@ import remarkCitations from "@/lib/markdown/remark-citations";
 import type { Citation } from "@/lib/api";
 import { CitationMarker } from "@/components/chat/citation-marker";
 import { GraphComponent } from "@/components/chat/graph-component";
+import citationStyles from "./citation-marker.module.css";
 
 /** The text inside a fenced code block of the given language, or null for any other block. */
 function fencedSource(node: ExtraProps["node"], language: string): string | null {
@@ -28,7 +29,16 @@ function markdownComponents(streaming: boolean, citations?: Citation[]): Compone
     // expired or relative paths from a PDF, and otherwise produce broken duplicates.
     img: () => null,
     table: ({ node: _node, ...props }) => <MarkdownTable {...props} />,
-    a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer nofollow" />,
+    a: ({ node: _node, href, title, children, ...props }) => {
+      if (title?.startsWith("sonia-grounding:") && href && /^https?:\/\//i.test(href)) {
+        let sourceTitle = title.slice("sonia-grounding:".length);
+        try { sourceTitle = decodeURIComponent(sourceTitle); } catch { /* keep the encoded label */ }
+        return <sup><a href={href} className={citationStyles.groundingLink} target="_blank"
+          rel="noreferrer nofollow" data-source-title={sourceTitle}
+          aria-label={`Open grounding source: ${sourceTitle}`}>↗</a></sup>;
+      }
+      return <a {...props} href={href} title={title} target="_blank" rel="noreferrer nofollow">{children}</a>;
+    },
     // A ```plotly block is a chart the model drew from the answer's numbers. The ```citations
     // block lists the sources behind the [n] markers; the server checks it and the markers show it.
     pre: ({ node, ...props }) => {

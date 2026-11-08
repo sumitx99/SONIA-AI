@@ -202,6 +202,58 @@ class ToolLoopTests(unittest.TestCase):
         self.assertEqual(len(seen), agent.MAX_ROUNDS + 1)
         self.assertEqual(seen[-1][1], [])
 
+    def test_max_tokens_continues_once_without_repeating_web_search(self):
+        query = "Find hybrid software developer jobs in Chandigarh"
+        search_call = {"functionCall": {"id": "search1", "name": agent.WEB_SEARCH_TOOL["name"],
+                        "args": {"query": query}}}
+        partial = "To land a Software Developer role in the Chandigarh region,"
+        continuation = " here are companies with relevant openings and salary details."
+        fake, seen = gemini_rounds(
+            [search_call],
+            [{"text": partial}, {"finishReason": "MAX_TOKENS"}],
+            [{"text": continuation}, {"finishReason": "STOP"}],
+        )
+
+        async def main():
+            return [event async for event in agent.answer_with_tools("user-1", query, "", [], {})]
+
+        with (
+            patch.object(agent, "stream_gemini_parts", fake),
+            patch.object(agent, "google_search_ready", return_value=False),
+            patch.object(agent, "web_search_available", return_value=True),
+            patch.object(agent, "image_search_configured", return_value=False),
+            patch.object(agent, "search_web", return_value=("Found jobs", [], [])) as search,
+            self.assertLogs("app.mcp_client.agent", level="INFO") as logs,
+        ):
+            events = asyncio.run(main())
+
+        deltas = [data["text"] for kind, data in events if kind == "delta"]
+        self.assertEqual(deltas, [partial, continuation])
+        self.assertEqual(len(seen), 3)
+        self.assertEqual(seen[2][1], [])
+        self.assertEqual(seen[2][0][-2], {"role": "model", "parts": [{"text": partial}]})
+        self.assertIn("Continue from where it stopped", seen[2][0][-1]["parts"][0]["text"])
+        search.assert_called_once_with(query)
+        self.assertIn("reason=MAX_TOKENS", " ".join(logs.output))
+
+    def test_second_max_tokens_surfaces_incomplete_answer_instead_of_looping(self):
+        fake, seen = gemini_rounds(
+            [{"text": "First partial"}, {"finishReason": "MAX_TOKENS"}],
+            [{"text": "Second partial"}, {"finishReason": "MAX_TOKENS"}],
+        )
+
+        async def main():
+            return [event async for event in agent.answer_with_tools("user-1", "q", "", [], {})]
+
+        with (
+            patch.object(agent, "stream_gemini_parts", fake),
+            patch.object(agent, "image_search_configured", return_value=False),
+            self.assertLogs("app.mcp_client.agent", level="WARNING"),
+        ):
+            with self.assertRaises(agent.IncompleteAnswerError):
+                asyncio.run(main())
+        self.assertEqual(len(seen), 2)
+
 
 class ToolSchemaTests(unittest.TestCase):
     # Zapier describes "any JSON value" with a $ref that loops back on itself; Gemini rejects that.
