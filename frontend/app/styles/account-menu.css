@@ -162,6 +162,22 @@
 .dark .account-settings-dialog .account-settings-error { background:#482a2a; color:#ffb5a6; border-color:#78443b; }
 .dark .account-popover { background:var(--popover); color:var(--foreground); border-color:var(--line); }
 
+/* Connection cards share the dark/custom palette with the settings portal. */
+:is(.dark,[data-appearance-custom="true"]) .account-settings-dialog .connections-list > li {
+ background:var(--paper); color:var(--foreground); border-color:var(--line);
+}
+:is(.dark,[data-appearance-custom="true"]) .account-settings-dialog .connections-url {
+ background:var(--surface-tint); color:var(--foreground); border:1px solid var(--line);
+}
+:is(.dark,[data-appearance-custom="true"]) .account-settings-dialog .connections-block { border-color:var(--line); }
+:is(.dark,[data-appearance-custom="true"]) .account-settings-dialog :is(.connections-name small,.connections-empty,.mcp-tool-name small) { color:var(--muted-foreground); }
+:is(.dark,[data-appearance-custom="true"]) .account-settings-dialog .connections-icon:not(.connections-brand-icon) { background:var(--surface-tint); color:var(--primary); }
+:is(.dark,[data-appearance-custom="true"]) .account-settings-dialog .connections-brand-icon { border-color:var(--line); }
+:is(.dark,[data-appearance-custom="true"]) .account-settings-dialog .mcp-tools li { border-bottom-color:var(--line) !important; }
+:is(.dark,[data-appearance-custom="true"]) .account-settings-dialog :is(.mcp-tools-toggle,.account-secondary-button):hover:not(:disabled) { background:var(--surface-tint); color:var(--foreground); border-color:var(--muted-foreground); }
+:is(.dark,[data-appearance-custom="true"]) .account-settings-dialog .mcp-switch input { accent-color:var(--primary); }
+:is(.dark,[data-appearance-custom="true"]) .account-settings-dialog .connections-error { color:#f1a694; }
+
 /* Appearance controls reuse the root palette, including live custom colours. */
 .appearance-settings { margin-bottom:30px; }
 .appearance-mode { display:grid; grid-template-columns:1fr 300px; gap:14px; align-items:center; padding-bottom:18px; }
