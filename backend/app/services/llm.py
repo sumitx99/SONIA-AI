@@ -27,13 +27,15 @@ WEB_SEARCH = os.getenv("GEMINI_WEB_SEARCH", "true").strip().lower() != "false"
 SEARCH_PAUSE = 600
 _search_paused_until = 0.0
 # Backup answers when Gemini is out of quota or down: Groq's OpenAI-compatible API, tried
-# model by model (each has its own free limits). Without GROQ_API_KEY there is no backup.
+# model by model (each has its own free per-minute token limit, so another model is another
+# budget). Without GROQ_API_KEY there is no backup.
 GROQ_API = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 GROQ_WEB_SEARCH = os.getenv("GROQ_WEB_SEARCH", "true").strip().lower() != "false"
 GROQ_WEB_MODELS = {"openai/gpt-oss-120b", "openai/gpt-oss-20b"}
 GROQ_MODELS = [model for model in (os.getenv("GROQ_MODEL", "openai/gpt-oss-120b").strip(),
-                                   os.getenv("GROQ_FALLBACK_MODEL", "openai/gpt-oss-20b").strip()) if model]
+                                   os.getenv("GROQ_FALLBACK_MODEL", "openai/gpt-oss-20b").strip(),
+                                   os.getenv("GROQ_SECOND_FALLBACK_MODEL", "qwen/qwen3.8-27b").strip()) if model]
 
 # The chat UI renders GitHub-flavoured Markdown (tables, lists, code) and KaTeX math, and
 # never renders raw HTML, so answers must be Markdown.
