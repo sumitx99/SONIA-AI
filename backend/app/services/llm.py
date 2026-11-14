@@ -348,11 +348,13 @@ class ToolSelectionUnavailable(BackupUnavailable):
 
 
 def gemini_unavailable(error: Exception) -> bool:
-    """Whether a Gemini failure is temporary (quota, overload, network) rather than a bad request."""
+    """Whether Gemini cannot serve this project right now (quota, billing, overload, network),
+    as opposed to rejecting a bad request, so a backup model should answer instead."""
     if isinstance(error, requests.HTTPError):
         status = error.response.status_code if error.response is not None else 503
-        # 402: the Gemini billing account needs a payment, which no retry will fix.
-        return status in (402, 429) or status >= 500
+        # 402/403: billing (unpaid balance, account under verification) or project access blocks
+        # every Gemini request until it is resolved outside the app; retries will not help.
+        return status in (402, 403, 429) or status >= 500
     return isinstance(error, (requests.ConnectionError, requests.Timeout))
 
 
