@@ -40,14 +40,20 @@ export function useConversations(userId?: string) {
       if (Array.isArray(parsed?.sessions) && Array.isArray(parsed?.pendingIds)) cached = parsed;
     } catch { /* Storage may be disabled. Server history still works. */ }
     setSessions(cached.sessions);
+    const shown = new Map(cached.sessions.map((chat) => [chat.id, fingerprint(chat)]));
     loadConversations(userId).then((remote) => {
       if (!active) return;
       saved.current = new Map(remote.map((chat) => [chat.id, fingerprint(chat)]));
-      const combined = new Map(remote.map((chat) => [chat.id, chat]));
-      for (const chat of cached.sessions) {
-        if (cached.pendingIds.includes(chat.id)) combined.set(chat.id, chat);
-      }
-      setSessions([...combined.values()]);
+      // The chat stays usable while history loads, so merge instead of replacing: keep unsynced
+      // backups and any chat created or changed meanwhile; the save effect then syncs them.
+      setSessions((current) => {
+        const local = new Map(current
+          .filter((chat) => cached.pendingIds.includes(chat.id) || shown.get(chat.id) !== fingerprint(chat))
+          .map((chat) => [chat.id, chat]));
+        const remoteIds = new Set(remote.map((chat) => chat.id));
+        return [...[...local.values()].filter((chat) => !remoteIds.has(chat.id)),
+          ...remote.map((chat) => local.get(chat.id) ?? chat)];
+      });
     }).catch(() => {
       if (active) setError("Account history could not be loaded. Your local backup is available; retry to reconnect.");
     }).finally(() => { if (active) setLoaded(true); });

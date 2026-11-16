@@ -96,7 +96,6 @@ Files: `backend/app/services/images/document_images.py`, `image_pipeline.py`, `i
 - **Scanned PDFs:** the whole page is one image with no text around it (OCR is off), so search is weak.
 - The answer model **never sees the pixels**; it only gets the location and nearby text.
 - Quality is capped at 1600 px; text drawn over the image is included; tiny logos and icons are indexed too.
-- Planned improvement: `future-requirements.md`, section "4. Visual understanding".
 
 **If any step fails**, the document row and its stored files are deleted, so no half-finished document is left behind.
 
@@ -116,6 +115,7 @@ Files: `backend/app/api/chat.py` → `POST /chat/stream`, `backend/app/services/
 - **Fallback:** if Gemini embeddings are unavailable (quota, access denied, down), Sonia uses a **keyword search** instead (Postgres full-text search, `search_chunks_by_text`).
 
 ### Step 3 – First search: 25 candidates
+(Search terms like vector, keyword and re-ranking are explained in "How search works" below.)
 File: `backend/app/services/retriever.py` → `get_reranked_context()`
 - pgvector finds the **25 chunks closest** to the question vector (`ORDER BY embedding <-> question`), only inside the allowed documents.
 - This is fast but rough.
@@ -158,6 +158,51 @@ File: `backend/app/services/answer_verification.py` → `check_citations()`
 ### Step 9 – Show the answer
 - The browser shows the streamed text, then the [n] markers become clickable citations with the quoted text.
 - A document citation can open the original PDF (`GET /documents/{id}/source`).
+
+---
+
+## How search works
+
+### The embedding model is not the search
+Search needs **two** things:
+
+1. **Embedding model (the translator).** It turns text into a list of numbers (a vector). Sonia uses Gemini `gemini-embedding-001`, which gives 768 numbers. Texts with similar meaning get vectors that sit close together, even with different words: "car ki keemat" and "gaadi ka price" land near each other. It does not find anything by itself.
+2. **Vector search (the finder).** It compares the question's vector with every chunk's vector and returns the **closest** ones. This is also called **semantic search** or **dense retrieval**. Comparing against every chunk would be slow, so an **index** is used. Sonia uses pgvector's **HNSW** index, which finds the closest vectors quickly but approximately (ANN, approximate nearest neighbour).
+
+### The other search words
+| Term | What it means | In Sonia |
+| --- | --- | --- |
+| **Vector / semantic / dense search** | Match by meaning, using embeddings | **Main search.** pgvector, distance `<->` (L2), top 25 |
+| **Keyword / lexical / sparse search** | Match the same words. The best-known method is **BM25** | **Backup only**, when the question can't be embedded. Postgres full-text search with `ts_rank` (not BM25) |
+| **Top-K** | How many results the search returns | K = 25 |
+| **Re-ranking** | A second, slower and more accurate pass over the top-K | Cross-encoder, 25 → 5; **off in production** (`RERANKER=off`) |
+| **Bi-encoder vs cross-encoder** | A bi-encoder (the embedding model) reads the question and the chunk separately: fast, rough. A cross-encoder (the re-ranker) reads them together: slow, precise | Gemini embeddings = bi-encoder; `ms-marco-MiniLM-L-6-v2` = cross-encoder |
+
+### The standard RAG flow, with Sonia's parts
+**RAG = Retrieval + Augmented + Generation**: find the passages, add them to the prompt, then let the model write the answer.
+
+```
+INGESTION / INDEXING (on upload, once)
+  Parse ──────────► Chunking ───────────► Embedding ──────────────► Vector store + index
+  PyMuPDF/Docling   sections, 1000 chars  Gemini, 768 numbers        Postgres + pgvector (HNSW)
+
+RETRIEVAL (on every question)
+  Query embedding ─► Search ─────────────────────────► Top-K ─► Re-ranking
+  Gemini            vector (keyword if embedding fails)  25       cross-encoder → 5 (off in prod)
+
+AUGMENTATION
+  5 chunks with IDs like D41 + chat history + question ─► prompt
+
+GENERATION
+  Gemini (backup: Groq) writes the answer with [1] markers ─► every quote checked
+```
+
+### What actually runs today
+| Situation | Search path |
+| --- | --- |
+| Production (`RERANKER=off`) | Question embedding → pgvector top 25 → **first 5 sent as they are** |
+| Local with the full setup | Question embedding → pgvector top 25 → cross-encoder → best 5 |
+| Gemini embeddings failing (quota, 403) | **Keyword search** top 25 → first 5 (or re-ranked, if the re-ranker is on) |
 
 ---
 

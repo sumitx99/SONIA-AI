@@ -67,7 +67,7 @@ class GenUITests(unittest.IsolatedAsyncioTestCase):
 
     async def test_incomplete_and_invalid_fences_discard_the_preview(self):
         for source in [block(ROOT, BUTTON, close=False),
-                       block(ROOT, BUTTON, {**BUTTON, "onclick": "fetch()"})]:
+                       block(ROOT, BUTTON, {**BUTTON, "value": 10})]:
             events = await run_answer(["Explanation.\n", source])
             self.assertEqual(events[-1], ("ui_spec", {"spec": None, "incomplete": True}))
             self.assertEqual(events[-2][1]["answer"], "Explanation.")
@@ -131,11 +131,14 @@ class GenUITests(unittest.IsolatedAsyncioTestCase):
         }
         events = await run_answer(["Explanation.\n", block(diagram)])
         self.assertEqual(events[-1][1]["spec"]["nodes"], [diagram])
-        for extra in [{"controls": [{"type": "button", "label": "Play"}]},
+        # Fields outside the catalog never reach the client, and they don't cost the diagram.
+        for extra in [{"controls": [{"type": "button", "label": "Play"}], "onclick": "fetch()"},
                       {"nodes": [{**diagram["nodes"][0], "x": 0, "y": 0}, diagram["nodes"][1]]},
-                      {"steps": [{"caption": "Nothing happens."}]}]:
+                      {"edges": [{**diagram["edges"][0], "tone": "success"}]}]:
             events = await run_answer(["Explanation.\n", block({**diagram, **extra})])
-            self.assertEqual(events[-1], ("ui_spec", {"spec": None, "incomplete": True}))
+            self.assertEqual(events[-1], ("ui_spec", {"spec": {**START, "nodes": [diagram]}}))
+        events = await run_answer(["Explanation.\n", block({**diagram, "steps": [{"caption": "Nothing happens."}]})])
+        self.assertEqual(events[-1], ("ui_spec", {"spec": None, "incomplete": True}))
 
     async def test_multiline_records_keep_both_views_and_drop_controls_nothing_reads(self):
         diagram = {

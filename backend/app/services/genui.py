@@ -33,7 +33,7 @@ ChartType = Literal["bar", "line", "area", "pie"]
 
 
 class StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="ignore", strict=True)
 
 
 class Start(StrictModel):

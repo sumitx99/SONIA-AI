@@ -119,9 +119,10 @@ export default function SoniaChatInterface() {
 
   useEffect(() => { setCurrentId(null); setDeleteTarget(null); setStopped(null); return () => answerController.current?.abort(); }, [session?.user.id]);
 
+  // Open the latest chat once history arrives, unless a new prompt is already being drafted.
   useEffect(() => {
-    if (historyLoaded && !currentId && sessions.length) setCurrentId(sessions[0].id);
-  }, [historyLoaded, currentId, sessions]);
+    if (historyLoaded && !currentId && sessions.length && !input.trim()) setCurrentId(sessions[0].id);
+  }, [historyLoaded, currentId, sessions, input]);
 
   // Signed-out visitors (or an expired session) go to the sign-in page.
   useEffect(() => {
@@ -183,7 +184,7 @@ export default function SoniaChatInterface() {
     const query = (continuation ? continuation.hasText
       ? "Continue the interrupted answer from where it stopped. Do not repeat the existing answer or any completed tool actions. Cite sources for additional factual claims."
       : continuation.query : replacement?.content ?? input).trim();
-    if (!query || busy.current || !historyLoaded) return;
+    if (!query || busy.current) return;
     if (replacement && !messages.some(m => m.id === replacement.messageId && m.sender === "user")) return;
     busy.current = true;
     const controller = new AbortController();
@@ -319,7 +320,7 @@ export default function SoniaChatInterface() {
   async function upload(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
-    if (!file || busy.current || !historyLoaded) return;
+    if (!file || busy.current) return;
     if (!file.name.toLowerCase().endsWith(".pdf")) {
       setFileError("Please choose a PDF document.");
       return;
@@ -457,7 +458,7 @@ export default function SoniaChatInterface() {
               <X size={18} />
             </button>
           </div>
-          <button className="button button-ink new-chat" onClick={newChat} disabled={!historyLoaded} aria-label="New conversation" title="New conversation">
+          <button className="button button-ink new-chat" onClick={newChat} aria-label="New conversation" title="New conversation">
             <Plus className="sidebar-new-plus" size={16} /><SquarePen className="sidebar-new-compose" size={21} aria-hidden="true" /><span>New conversation</span>
           </button>
           <div className="sidebar-section-label mono">
@@ -714,14 +715,14 @@ export default function SoniaChatInterface() {
                 onChange={setInput}
                 onKeyDown={onKeyDown}
                 placeholder="What’s on your mind?"
-                disabled={!!pending || !!generatingId || !historyLoaded}
+                disabled={!!pending || !!generatingId}
               />
               <div className="composer-controls">
                 <button
                   type="button"
                   className="attach-button"
                   onClick={() => fileInput.current?.click()}
-                  disabled={!!pending || !!generatingId || !historyLoaded}
+                  disabled={!!pending || !!generatingId}
                 >
                   <Paperclip size={16} />
                   <span>Add a PDF</span>
@@ -741,7 +742,7 @@ export default function SoniaChatInterface() {
                     else if (canResume) void ask(undefined, true);
                     else void ask();
                   }}
-                  disabled={!answeringHere && ((!input.trim() && !canResume) || !!pending || !!generatingId || !historyLoaded)}
+                  disabled={!answeringHere && ((!input.trim() && !canResume) || !!pending || !!generatingId)}
                 >
                   {answeringHere ? <span className="composer-stop-mark" aria-hidden="true" /> : canResume ? <Play size={18} fill="currentColor" aria-hidden="true" /> : <ArrowUp size={20} aria-hidden="true" />}
                   <span className="composer-action-tooltip" aria-hidden="true">{composerActionLabel}</span>
