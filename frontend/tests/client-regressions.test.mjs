@@ -412,3 +412,31 @@ test('the stream hands over the final answer and its checked citations', async (
   assert.deepEqual(final, { answer: 'It costs $0.25 [1].', citations: [citation] });
   assert.deepEqual(streamedInline, inline);
 });
+
+test('validated GenUI snapshots reach chat handlers in order and can be withdrawn', async (t) => {
+  const { parseGenUI } = loadTypeScript('../lib/genui.ts');
+  const spec = {
+    version: '2.0', initial_state: { mode: 'one' }, nodes: [
+      { id: 'root', type: 'column' },
+      { id: 'switch', parent: 'root', type: 'button', label: 'Three', key: 'mode', value: 'three' },
+    ],
+  };
+  const events = [
+    ['delta', { text: 'An explanation.' }],
+    ['ui_spec', { spec }],
+    ['ui_spec', { spec: { ...spec, nodes: [...spec.nodes, { id: 'unsafe', parent: 'root', type: 'button', href: '/delete' }] } }],
+    ['ui_spec', { spec: null }],
+    ['done', {}],
+  ];
+  const body = events.map(([name, data]) => `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`).join('');
+  t.mock.method(globalThis, 'fetch', async () => new Response(body));
+  const snapshots = [];
+  const result = await client().streamMessage('Compare scaling', [], {
+    onDelta() {},
+    onUISpec: source => snapshots.push(parseGenUI(source)),
+  });
+  assert.deepEqual(snapshots, [spec, null, null]);
+  assert.deepEqual(result, { cutOff: false });
+  assert.equal(parseGenUI({ ...spec, nodes: [spec.nodes[0], { ...spec.nodes[1], parent: 'missing' }] }), null);
+  assert.equal(parseGenUI({ ...spec, nodes: [spec.nodes[0], { ...spec.nodes[1], value: 3 }] }), null);
+});

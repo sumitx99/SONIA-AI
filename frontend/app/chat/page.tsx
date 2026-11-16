@@ -35,6 +35,8 @@ import { DocumentImageGallery } from "@/components/chat/document-image";
 import { GeneratedImageGallery } from "@/components/chat/generated-images";
 import { PromptComposer } from "@/components/chat/prompt-composer";
 import { WebImageGallery } from "@/components/chat/web-images";
+import { GenUIRenderer } from "@/components/chat/genui/renderer";
+import { parseGenUI } from "@/lib/genui";
 import { MarkdownMessage } from "@/components/chat/markdown-message";
 import { ToolCalls, WebSources } from "@/components/chat/tool-calls";
 import { streamMessage, uploadPDF, waitForDocumentImages, deleteConversation, handleApiError, type ImageAttachment,
@@ -266,6 +268,15 @@ export default function SoniaChatInterface() {
           setSessions(previous => previous.map(chat => chat.id === id ? { ...chat, messages: chat.messages.map(message =>
             message.id === answerId ? { ...message, generated_images: [...new Map([...(message.generated_images ?? []), ...responseImages].map(image => [image.src, image])).values()] } : message) } : chat));
         },
+        onUISpec: (source, incomplete) => {
+          const spec = parseGenUI(source);
+          if (spec) start();
+          update({
+            ui_spec: spec,
+            ...(incomplete && { notice: spec ? "Part of the interactive visual couldn’t be shown."
+              : "Sonia couldn’t finish the interactive part. Try asking for the diagram again." }),
+          });
+        },
         onCitations: (answer, citations) => {
           rawText = answer;
           text = applyInlineGroundingCitations(rawText, inlineCitations);
@@ -276,15 +287,15 @@ export default function SoniaChatInterface() {
       toolCalls = toolCalls.map(call => call.status === "running" ? { ...call, status: cutOff ? "error" as const : "done" as const } : call);
       update({
         streaming: false, tool_calls: toolCalls,
-        ...(cutOff && { notice: "The answer was cut off part-way. Ask again to get the rest." }),
+        ...(cutOff && { ui_spec: null, notice: "The answer was cut off part-way. Ask again to get the rest." }),
       });
     } catch (error) {
       if (controller.signal.aborted) {
         setStopped({ id, query: continuation?.query ?? query, hasText: !!text || !!continuation?.hasText });
-        if (started) update({ streaming: false, notice: "Answer stopped. Resume to continue.",
+        if (started) update({ streaming: false, ui_spec: null, notice: "Answer stopped. Resume to continue.",
           tool_calls: toolCalls.map(call => call.status === "running" || call.status === "awaiting_approval" ? { ...call, status: "stopped" } : call) });
       } else if (started) {
-        update({ streaming: false, tool_calls: toolCalls.map(call => call.status === "running" ? { ...call, status: "error" } : call),
+        update({ streaming: false, ui_spec: null, tool_calls: toolCalls.map(call => call.status === "running" ? { ...call, status: "error" } : call),
           ...(text ? { notice: "The answer was cut off part-way. Ask again to get the rest." }
             : { content: handleApiError(error), error: true }) });
       } else {
@@ -647,6 +658,8 @@ export default function SoniaChatInterface() {
                       </form> : message.sender === "bot" && !message.error
                         ? <MarkdownMessage content={message.content} streaming={message.streaming} citations={message.citations} />
                         : <p>{message.content}</p>}
+                      {message.sender === "bot" && !message.error && message.ui_spec &&
+                        <GenUIRenderer source={message.ui_spec} citations={message.citations} reduceMotion={preferences.reduce_motion} />}
                       {message.sender === "bot" && !message.streaming && <WebSources sources={message.sources} />}
                       {message.notice && <p role="status" style={{ fontSize: 13, color: "var(--muted-foreground)" }}>{message.notice}</p>}
                       {message.images?.length ? <DocumentImageGallery images={message.images} /> : null}

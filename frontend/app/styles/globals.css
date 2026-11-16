@@ -1240,6 +1240,27 @@ h2 {
   .markdown-body.is-streaming > :last-child::after { animation: none; }
 }
 
+/* Code blocks in answers: toolbar shared with tables, code kept exactly as written */
+.md-code {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.md-code-toolbar { border-bottom-color: transparent; }
+.markdown-body .md-code pre {
+  margin: 0;
+  border-radius: 0;
+  line-height: 1.55;
+  white-space: pre;
+  tab-size: 4;
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "calt" 0;
+}
+.markdown-body .md-code pre:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
 /* Tables in answers */
 .md-table {
   overflow: hidden;

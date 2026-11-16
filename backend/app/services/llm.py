@@ -6,6 +6,7 @@ import time
 
 import requests
 
+from app.services.genui import GENUI_INSTRUCTION
 from app.services.web_search import groq_pages, groq_sources
 from app.services.web_activity import requested_urls
 
@@ -266,7 +267,7 @@ def _web_tools(search: bool, requested: bool) -> list:
 
 def _post_stream(contents: list, function_declarations: list, search: bool) -> requests.Response:
     web = _web_tools(search, not getattr(contents, "final_answer_only", False))
-    instruction = SYSTEM_INSTRUCTION + CHART_INSTRUCTION + CITATION_INSTRUCTION + reply_language_policy(getattr(contents, "question", ""))
+    instruction = SYSTEM_INSTRUCTION + CHART_INSTRUCTION + GENUI_INSTRUCTION + CITATION_INSTRUCTION + reply_language_policy(getattr(contents, "question", ""))
     if web or any(tool["name"] in (READ_WEB_PAGE_TOOL["name"], WEB_SEARCH_TOOL["name"])
                   for tool in function_declarations):
         search_description = ", and search Google" if search else (
@@ -347,16 +348,22 @@ class ToolSelectionUnavailable(BackupUnavailable):
     """The backup answered but did not produce a valid tool shortlist."""
 
 
+def gemini_access_denied(error: Exception) -> bool:
+    return (isinstance(error, requests.HTTPError) and error.response is not None
+            and error.response.status_code in (401, 403))
+
+
 def gemini_unavailable(error: Exception) -> bool:
-    """Whether Gemini cannot serve this project right now (quota, billing, overload, network),
-    as opposed to rejecting a bad request, so a backup model should answer instead."""
+    """Whether Gemini cannot serve this project right now (access, quota, billing, overload,
+    network), as opposed to rejecting a bad request, so a backup model should answer instead."""
+    if gemini_access_denied(error):
+        return True
     if isinstance(error, requests.HTTPError):
         status = error.response.status_code if error.response is not None else 503
-        # 402/403: billing (unpaid balance, account under verification) or project access blocks
-        # every Gemini request until it is resolved outside the app; retries will not help.
-        return status in (402, 403, 429) or status >= 500
+        # 402: billing (unpaid balance, account under verification) blocks every Gemini request
+        # until it is resolved outside the app; retries will not help. 401/403 are handled above.
+        return status in (402, 429) or status >= 500
     return isinstance(error, (requests.ConnectionError, requests.Timeout))
-
 
 def backup_configured() -> bool:
     return bool(GROQ_API_KEY and GROQ_MODELS)
@@ -427,7 +434,7 @@ def stream_tool_backup(contents: list, declarations: list, allow_web: bool = Tru
     if allow_web and web_search_available() and not any(item["name"] == WEB_SEARCH_TOOL["name"] for item in offered):
         offered.append(WEB_SEARCH_TOOL)
         pinned.add(WEB_SEARCH_TOOL["name"])
-    instruction = SYSTEM_INSTRUCTION + CHART_INSTRUCTION + CITATION_INSTRUCTION + TOOL_INSTRUCTION + WEB_INSTRUCTION.format(search=", and use web_search") + reply_language_policy(getattr(contents, "question", ""))
+    instruction = SYSTEM_INSTRUCTION + CHART_INSTRUCTION + GENUI_INSTRUCTION + CITATION_INSTRUCTION + TOOL_INSTRUCTION + WEB_INSTRUCTION.format(search=", and use web_search") + reply_language_policy(getattr(contents, "question", ""))
     messages = [{"role": "system", "content": instruction}]
     for turn in contents:
         parts = turn.get("parts", [])
@@ -531,7 +538,7 @@ def stream_backup_answer(query: str, context: str, history=None):
         yield from groq_web_answer(query, context, history)
         return
     messages = [
-        {"role": "system", "content": SYSTEM_INSTRUCTION + CHART_INSTRUCTION + CITATION_INSTRUCTION + BACKUP_INSTRUCTION + reply_language_policy(query)},
+        {"role": "system", "content": SYSTEM_INSTRUCTION + CHART_INSTRUCTION + GENUI_INSTRUCTION + CITATION_INSTRUCTION + BACKUP_INSTRUCTION + reply_language_policy(query)},
         {"role": "user", "content": user_turn(query, context, history)["parts"][0]["text"]},
     ]
     for model in GROQ_MODELS:
@@ -594,7 +601,7 @@ def groq_web_answer(query: str, context: str, history=None):
     if not GROQ_WEB_SEARCH:
         raise WebSearchUnavailable("Groq web search is disabled")
     messages = [
-        {"role": "system", "content": SYSTEM_INSTRUCTION + CHART_INSTRUCTION + CITATION_INSTRUCTION + GROQ_WEB_INSTRUCTION + reply_language_policy(query)},
+        {"role": "system", "content": SYSTEM_INSTRUCTION + CHART_INSTRUCTION + GENUI_INSTRUCTION + CITATION_INSTRUCTION + GROQ_WEB_INSTRUCTION + reply_language_policy(query)},
         {"role": "user", "content": user_turn(query, context, history)["parts"][0]["text"]},
     ]
     for index, model in enumerate(dict.fromkeys(GROQ_MODELS)):

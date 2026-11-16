@@ -8,6 +8,7 @@ import { loadConversations, saveConversation, type ChatSession } from "@/lib/api
 function durable(chats: ChatSession[]): ChatSession[] {
   return chats.map((chat) => ({ ...chat, messages: chat.messages.map((message) => ({
     ...message, streaming: false,
+    ui_spec: message.streaming ? undefined : message.ui_spec ?? undefined,
     images: message.images?.map((image) => ({ ...image, url: "", source_url: null })),
     web_images: message.web_images?.map((image) => ({ ...image, url: "" })),
   })) }));

@@ -328,7 +328,10 @@ html.dark .chat-app .upload-invite .upload-icon { background:var(--surface-tint)
 html.dark .chat-app .prompt-suggestions button, html.dark .chat-app .document-chips span { background:var(--card); border-color:var(--line); color:var(--muted-foreground); }
 html.dark .chat-app .prompt-suggestions button:hover { background:var(--surface-tint); border-color:var(--primary); }
 html.dark .chat-app :is(.md-table-toolbar,.markdown-body thead) { background:var(--surface-tint); color:var(--foreground); }
-html.dark .chat-app :is(.md-table,.markdown-body th,.markdown-body td) { border-color:var(--line); }
+html.dark .chat-app :is(.md-table,.md-code,.markdown-body th,.markdown-body td) { border-color:var(--line); }
+html:is(.dark,[data-appearance-custom="true"]) .chat-app .md-table-toolbar :is(.mono,button) { color:var(--muted-foreground); }
+html:is(.dark,[data-appearance-custom="true"]) .chat-app .md-table-toolbar button:hover { background:var(--accent); color:var(--foreground); }
+html:is(.dark,[data-appearance-custom="true"]) .chat-app .md-code-toolbar { border-bottom-color:var(--line); }
 html.dark .chat-app .markdown-body :is(pre,code,blockquote) { background:var(--surface-tint); color:var(--foreground); border-color:var(--line); }
 html.dark .chat-gate { background:var(--paper); color:var(--foreground); }
 html.dark .account-page :is(.auth-form input,.auth-tabs) { background:var(--card); color:var(--foreground); border-color:var(--line); }
@@ -364,7 +367,7 @@ html[data-appearance-custom="true"] .chat-app .send-button[data-action="stop"] {
 html[data-appearance-custom="true"] .chat-app .markdown-body a { color:var(--appearance-link); }
 html[data-appearance-custom="true"] .chat-app .web-sources a { background:var(--surface-tint); color:var(--foreground); border-color:var(--line); }
 html[data-appearance-custom="true"] .chat-app :is(.md-table-toolbar,.markdown-body thead) { background:var(--surface-tint); color:var(--foreground); }
-html[data-appearance-custom="true"] .chat-app :is(.md-table,.markdown-body th,.markdown-body td) { border-color:var(--line); }
+html[data-appearance-custom="true"] .chat-app :is(.md-table,.md-code,.markdown-body th,.markdown-body td) { border-color:var(--line); }
 html .chat-app :is(.markdown-body,.chat-message > p) { font-size:calc(var(--appearance-ui-size,14px) - 1px); }
 html .chat-app .prompt-composer-input { font-size:var(--appearance-ui-size,14px); }
 html .chat-app .session-select { font-size:calc(var(--appearance-ui-size,14px) - 2px); }

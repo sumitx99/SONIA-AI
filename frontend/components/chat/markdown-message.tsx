@@ -6,6 +6,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { MarkdownTable } from "@/components/chat/markdown-table";
+import { MarkdownCode } from "@/components/chat/markdown-code";
 import "katex/dist/katex.min.css";
 import remarkNoImages from "@/lib/markdown/remark-no-images";
 import remarkCitations from "@/lib/markdown/remark-citations";
@@ -14,13 +15,16 @@ import { CitationMarker } from "@/components/chat/citation-marker";
 import { GraphComponent } from "@/components/chat/graph-component";
 import citationStyles from "./citation-marker.module.css";
 
-/** The text inside a fenced code block of the given language, or null for any other block. */
-function fencedSource(node: ExtraProps["node"], language: string): string | null {
+/** A fenced code block's language tag (null when untagged) and raw text, or null for a non-code <pre>. */
+function fencedBlock(node: ExtraProps["node"]): { language: string | null; source: string } | null {
   const code = node?.children[0];
   if (!code || code.type !== "element" || code.tagName !== "code") return null;
   const classes = code.properties?.className;
-  if (!Array.isArray(classes) || !classes.includes(`language-${language}`)) return null;
-  return code.children.map((child) => (child.type === "text" ? child.value : "")).join("");
+  const tag = Array.isArray(classes) ? classes.find((name) => String(name).startsWith("language-")) : undefined;
+  return {
+    language: tag === undefined ? null : String(tag).slice("language-".length),
+    source: code.children.map((child) => (child.type === "text" ? child.value : "")).join(""),
+  };
 }
 
 function markdownComponents(streaming: boolean, citations?: Citation[]): Components {
@@ -42,9 +46,10 @@ function markdownComponents(streaming: boolean, citations?: Citation[]): Compone
     // A ```plotly block is a chart the model drew from the answer's numbers. The ```citations
     // block lists the sources behind the [n] markers; the server checks it and the markers show it.
     pre: ({ node, ...props }) => {
-      if (fencedSource(node, "citations") !== null) return null;
-      const chart = fencedSource(node, "plotly");
-      return chart === null ? <pre {...props} /> : <GraphComponent source={chart} streaming={streaming} />;
+      const block = fencedBlock(node);
+      if (block?.language === "citations") return null;
+      if (block?.language === "plotly") return <GraphComponent source={block.source} streaming={streaming} />;
+      return block ? <MarkdownCode {...props} {...block} /> : <pre {...props} />;
     },
     sup: ({ node: _node, ...props }) => {
       const n = Number((props as Record<string, unknown>)["data-citation"]);

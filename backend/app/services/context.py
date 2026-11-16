@@ -21,24 +21,24 @@ async def answer_context(query, document_ids, scope_documents, include_images, u
     Image URLs come from retrieved metadata; the language model never invents them.
     Returns the prompt context and the image fields of the response.
     """
-    try:
-        query_embedding = await asyncio.to_thread(get_embedding, query)
-    except Exception as error:
-        if not gemini_unavailable(error):
-            raise
-        # Searching by meaning needs Gemini; keyword search keeps the documents usable meanwhile.
-        logger.warning("Embedding service unavailable (%s); searching documents by keyword", error)
-        query_embedding = None
-    logger.info("Starting advanced retrieval with re-ranking...")
     requested = (document_ids or []) if scope_documents else document_ids
     # Only the signed-in user's documents are ever searched (None = all of theirs).
     scope = await owned_document_ids(user_id, requested)
-    context = await get_reranked_context(query, query_embedding, document_ids=scope)
+    context, query_embedding = "", None
+    if scope:
+        try:
+            query_embedding = await asyncio.to_thread(get_embedding, query)
+        except Exception as error:
+            if not gemini_unavailable(error):
+                raise
+            logger.warning("Embedding service unavailable (%s); searching documents by keyword", error)
+        logger.info("Starting advanced retrieval with re-ranking...")
+        context = await get_reranked_context(query, query_embedding, document_ids=scope)
 
     images = []
     image_status = "not_requested"
     image_notice = None
-    if include_images or wants_images(query):
+    if include_images or (scope and wants_images(query)):
         image_status = "disabled"
         image_notice = "Image storage is not configured on this server."
         try:

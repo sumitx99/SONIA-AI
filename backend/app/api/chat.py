@@ -14,8 +14,9 @@ from app.core.auth import current_user
 from app.mcp_client.agent import answer_with_tools, available_tools, resolve_approval
 from app.services.context import answer_context
 from app.services.chat_memory import parse_history
+from app.services.genui import GenUIStream, supported_chart
 from app.services.answer_verification import check_citations
-from app.services.llm import (NO_ANSWER, BackupUnavailable, backup_configured, gemini_unavailable,
+from app.services.llm import (NO_ANSWER, BackupUnavailable, backup_configured, gemini_access_denied, gemini_unavailable,
                               stream_backup_answer, ToolSelectionUnavailable, WebSearchUnavailable)
 from app.services.web_activity import requested_urls
 
@@ -32,14 +33,18 @@ async def chat(query: str = Form(...), document_ids: list[int] | None = Form(Non
         logger.info(f"Received query: '{query}'")
         context, meta = await answer_context(query, document_ids, scope_documents, include_images, user_id)
         declarations, registry = await _load_tools(user_id)
-        answer, citations, web_images = "", [], []
+        answer, citations, web_images, ui_spec = "", [], [], None
+        ui_incomplete = False
         async for name, data in _answer_events(user_id, query, context, declarations, registry, turns):
             if name == "citations":
                 answer, citations = data["answer"], data["citations"]
+            elif name == "ui_spec":
+                ui_spec = data["spec"]
+                ui_incomplete = data.get("incomplete", False)
             elif name == "web_images":
                 web_images.extend(data["images"])
         logger.info("Generated LLM response.")
-        return {"query": query, "answer": answer or NO_ANSWER, "citations": citations, "web_images": web_images, **meta}
+        return {"query": query, "answer": answer or NO_ANSWER, "citations": citations, "web_images": web_images, "ui_spec": ui_spec, "ui_incomplete": ui_incomplete, **meta}
 
     except HTTPError as e:
         logger.exception("The AI service failed during chat")
@@ -54,6 +59,8 @@ def _failure_message(error: Exception) -> str:
         return "Sonia couldn’t select the connected tools for this request. Please retry your question."
     if isinstance(error, WebSearchUnavailable):
         return "Web search could not be completed right now. Please try again later; current information could not be verified."
+    if gemini_access_denied(error):
+        return "Sonia couldn't access the AI provider. Check the backend's model credentials and permissions."
     if isinstance(error, BackupUnavailable) or gemini_unavailable(error):
         return "Sonia's AI models are busy or have used up today's free quota. Please try again in a little while."
     return "The answer was interrupted. Please try again."
@@ -73,8 +80,9 @@ async def chat_stream(query: str = Form(...), document_ids: list[int] | None = F
     (a provider-grounded answer segment and source link, as grounding metadata arrives), `citations`
     ({"answer", "citations"}: the final text without its citations block, and each checked
     citation), then `done`, or `error` ({"detail"}) if the answer breaks off part-way. The model
-    may read web pages, listed in `sources` events. With MCP connections it may also call tools, reported as
-    `tool_call` and, for tools that need consent, `approval_required`. If Gemini is out of quota or
+    may emit validated layout snapshots in `ui_spec` events and read web pages listed in `sources`.
+    With MCP connections it may also call tools, reported as `tool_call` and, for tools that need
+    consent, `approval_required`. If Gemini is out of quota or
     down before anything was shown, a backup model answers instead.
     """
     turns = parse_history(history)
@@ -116,8 +124,28 @@ async def _load_tools(user_id):
 
 
 async def _answer_events(user_id, query, context, declarations, registry, turns):
-    """The answer's events, streamed as written, ending with its checked citations."""
+    """Stream prose and UI previews, then checked citations and the final UI spec."""
     draft, sources, evidence = [], {}, []
+    ui = GenUIStream()
+
+    def answer_text(events):
+        text = []
+
+        def flush():
+            if text:
+                piece = "".join(text)
+                draft.append(piece)
+                text.clear()
+                yield "delta", {"text": piece}
+
+        for name, data in events:
+            if name == "delta":
+                text.append(data["text"])
+            else:
+                yield from flush()
+                yield name, data
+        yield from flush()
+
     linked_pages = requested_urls(query)
     failed_pages = set()
     page_unreadable = ("I couldn’t read the content at the link you shared. "
@@ -130,7 +158,15 @@ async def _answer_events(user_id, query, context, declarations, registry, turns)
                 evidence.extend(data["sources"])
                 continue
             if name == "delta":
-                draft.append(data["text"])
+                shown = True
+                for event in answer_text(ui.feed(data["text"])):
+                    yield event
+                continue
+            if name == "inline_citation":
+                position = ui.position(data["position"])
+                if position is None:
+                    continue
+                data = {**data, "position": position}
             elif name == "sources":
                 sources.update({item["url"]: item for item in data["sources"]})
             elif name == "tool_call" and data.get("tool") in {"read_web_page", "url_context"}:
@@ -140,7 +176,7 @@ async def _answer_events(user_id, query, context, declarations, registry, turns)
                         failed_pages.add(url)
                     elif data.get("status") == "done":
                         failed_pages.discard(url)
-            shown = shown or name == "delta" or (name == "tool_call" and data.get("server") != "Web")
+            shown = shown or (name == "tool_call" and data.get("server") != "Web")
             yield name, data
     except Exception as error:
         if (not shown and linked_pages and linked_pages <= failed_pages
@@ -159,19 +195,33 @@ async def _answer_events(user_id, query, context, declarations, registry, turns)
             elif kind == "evidence":
                 evidence.extend(value["sources"])
             elif kind == "text":
-                draft.append(value)
-                yield "delta", {"text": value}
+                for event in answer_text(ui.feed(value)):
+                    yield event
             else:
                 if kind == "sources":
                     sources.update({item["url"]: item for item in value["sources"]})
                 yield kind, value
+    for event in answer_text(ui.finish()):
+        yield event
     if not "".join(draft).strip():
+        if ui.seen_ui:
+            yield "ui_spec", {"spec": None}
         message = page_unreadable if linked_pages and linked_pages <= failed_pages else NO_ANSWER
         yield "delta", {"text": message}
         return
     answer, citations = await asyncio.to_thread(check_citations, "".join(draft), context,
                                                 list(sources.values()), evidence)
     yield "citations", {"answer": answer, "citations": citations}
+    if ui.seen_ui:
+        quotes = {item["n"]: item["quote"] for item in citations if item["verified"]}
+        user_text = [query, *(turn["content"] for turn in turns if turn["sender"] == "user")]
+        spec = (ui.spec.snapshot(lambda chart: supported_chart(chart, quotes, user_text))
+                if ui.complete else None)
+        payload = {"spec": spec}
+        if ui.dropped or not ui.complete:
+            # Whatever was valid is still shown; the flag tells the client some of it was lost.
+            payload["incomplete"] = True
+        yield "ui_spec", payload
 
 
 class ApprovalInput(BaseModel):

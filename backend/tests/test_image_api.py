@@ -114,9 +114,14 @@ class ImageAPITests(unittest.TestCase):
         self.assertEqual(search.call_args.kwargs["image_number"], 9)
 
     def test_new_empty_chat_does_not_search_other_uploaded_documents(self):
-        _, text_search, search, _, _ = self.chat("Show images", {"scope_documents": "true"}, candidates=[])
-        self.assertEqual(text_search.call_args.kwargs["document_ids"], [])
-        self.assertEqual(search.call_args.kwargs["document_ids"], [])
+        response, text_search, search, _, model = self.chat(
+            "Explain horizontal scaling with an interactive diagram", {"scope_documents": "true"},
+        )
+        text_search.assert_not_called()
+        search.assert_not_called()
+        self.assertEqual(response["image_status"], "not_requested")
+        self.assertIsNone(response["image_notice"])
+        self.assertNotIn("Image retrieval status", model.call_args.args[0][-1]["parts"][0]["text"])
 
     def test_unscoped_chat_searches_only_the_users_documents(self):
         _, text_search, _, _, _ = self.chat("Summarize the policy")
@@ -211,14 +216,35 @@ class ImageAPITests(unittest.TestCase):
         self.assertEqual(self.client.post("/chat/stream", data={"query": "hi"}).status_code, 401)
 
     def test_documents_are_searched_by_keyword_when_gemini_cannot_embed(self):
-        spend_cap = requests.HTTPError(response=Mock(status_code=429))
-        with patch.object(context, "get_embedding", side_effect=spend_cap), \
+        denied = requests.HTTPError(response=Mock(status_code=403))
+        with patch.object(context, "get_embedding", side_effect=denied), \
              patch.object(context, "get_reranked_context", return_value="Document text") as text_search, \
              patch.object(agent, "stream_gemini_parts", return_value=iter([{"text": "Answer."}])), \
              self.assertLogs("app.services.context", level="WARNING"):
             response = self.client.post("/chat/stream", data={"query": "Summarize the policy"})
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(text_search.call_args.args[1])
+        self.assertEqual(text_search.call_args.kwargs["document_ids"], [7])
+        self.assertIn("event: done", response.text)
+
+    def test_genui_stream_with_no_documents_uses_backup_when_gemini_denies_access(self):
+        denied = requests.HTTPError(response=Mock(status_code=403))
+        backup_ui = ('Scaling adds servers.\n\n```genui\n'
+                     '{"version":"2.0","initial_state":{}}\n'
+                     '{"id":"note","type":"text","content":"Requests are split across servers."}\n'
+                     '```')
+        with patch.object(context, "get_embedding", side_effect=denied) as embed, \
+             patch.object(agent, "stream_gemini_parts", side_effect=denied), \
+             patch.object(agent, "backup_configured", return_value=True), \
+             patch.object(agent, "stream_tool_backup", return_value=iter([{"text": backup_ui}])):
+            response = self.client.post("/chat/stream", data={
+                "query": "Explain horizontal scaling with an interactive diagram and a Play control.",
+                "scope_documents": "true",
+            })
+        self.assertEqual(response.status_code, 200)
+        embed.assert_not_called()
+        self.assertIn("event: ui_spec", response.text)
+        self.assertIn("Requests are split across servers.", response.text)
         self.assertIn("event: done", response.text)
 
     def test_provider_error_details_never_reach_the_user(self):

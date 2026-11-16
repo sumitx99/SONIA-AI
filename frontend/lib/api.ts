@@ -1,3 +1,4 @@
+import type { GenUISpec } from "@/lib/genui";
 // lib/api.ts
 import { supabase } from "@/lib/supabase";
 
@@ -109,6 +110,7 @@ export interface ChatMessage {
   tool_calls?: ToolCall[];
   sources?: WebSource[];
   citations?: Citation[];
+  ui_spec?: GenUISpec | null;
   /** Set while this upload message's document still has images in background processing. */
   images_pending_document_id?: number | null;
 }
@@ -248,6 +250,8 @@ export interface ChatResponse {
   query: string;
   answer: string;
   citations?: Citation[];
+  ui_spec?: GenUISpec | null;
+  ui_incomplete?: boolean;
   images?: ImageAttachment[];
   web_images?: WebImage[];
   image_notice?: string | null;
@@ -357,6 +361,7 @@ export interface StreamHandlers {
   onInlineCitation?: (citation: InlineGroundingCitation) => void;
   onWebImages?: (images: WebImage[]) => void;
   onGeneratedImages?: (images: GeneratedImage[]) => void;
+  onUISpec?: (spec: GenUISpec | null, incomplete?: boolean) => void;
   /** The final answer text (without its citations block) and its checked citations, at the end. */
   onCitations?: (answer: string, citations: Citation[]) => void;
 }
@@ -382,12 +387,13 @@ export const streamMessage = async (
 
   // An API deployed before streaming existed: fall back to the one-shot endpoint.
   if (response.status === 404) {
-    const { answer, citations, web_images, ...meta } = await sendMessage(query, documentIds, history, signal);
+    const { answer, citations, web_images, ui_spec, ui_incomplete, ...meta } = await sendMessage(query, documentIds, history, signal);
     signal?.throwIfAborted();
     handlers.onMeta?.(meta);
     handlers.onDelta(answer);
     if (web_images?.length) handlers.onWebImages?.(web_images);
     if (citations) handlers.onCitations?.(answer, citations);
+    if (ui_spec || ui_incomplete) handlers.onUISpec?.(ui_spec ?? null, ui_incomplete);
     return { cutOff: false };
   }
   if (!response.ok || !response.body) {
@@ -423,6 +429,7 @@ export const streamMessage = async (
       else if (event === "inline_citation") handlers.onInlineCitation?.(payload);
       else if (event === "web_images") handlers.onWebImages?.(payload.images);
       else if (event === "generated_images") handlers.onGeneratedImages?.(payload.images);
+      else if (event === "ui_spec") handlers.onUISpec?.(payload.spec, payload.incomplete === true);
       else if (event === "citations") handlers.onCitations?.(payload.answer, payload.citations);
       else if (event === "delta") {
         wroteText = true;

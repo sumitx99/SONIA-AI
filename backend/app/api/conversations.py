@@ -1,12 +1,13 @@
 """Account-owned chat history. Signed R2 URLs are renewed, never persisted."""
 
 import json
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field
 
 from app.core.auth import current_user
+from app.services.genui import GenUISpec, saved_spec
 from app.core.db import ensure_document_schema, get_pool, owned_document_ids
 from app.services.conversation_cache import (cache_conversations, get_cached_conversations,
                                              invalidate_conversations)
@@ -98,6 +99,8 @@ class SavedMessage(BaseModel):
     tool_calls: list[SavedToolCall] = Field(default_factory=list, max_length=30)
     sources: list[SavedSource] = Field(default_factory=list, max_length=10)
     citations: list[SavedCitation] = Field(default_factory=list, max_length=40)
+    # A visual saved under an earlier catalog version is dropped; its prose answer stays.
+    ui_spec: Annotated[GenUISpec | None, BeforeValidator(saved_spec)] = None
     # Set on an upload's "ready" message while that document's images are still being processed,
     # so the chat can resume checking their status after a reload.
     images_pending_document_id: int | None = None
