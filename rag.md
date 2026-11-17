@@ -151,8 +151,12 @@ The model receives, in order:
 
 ### Step 8 – Check every citation
 File: `backend/app/services/answer_verification.py` → `check_citations()`
-- For each [n], Sonia looks up the cited passage (for example `D41`) and checks that the **quote really appears in it**. No extra model call is used.
-- Found → **verified**. Not found → not verified, so the UI doesn't present it as proof.
+- For each [n], Sonia looks up the cited source: a document passage (for example `D41`), a tool result, or a web page (pages the search already read are reused; others are fetched, at most 6). It then checks that the **quote really appears in it**. No extra model call is used.
+- Both texts are normalised first: same case, smart quotes and dashes made plain, extra spaces removed.
+- Punctuation at the start or end of the quote is ignored, because models often add a full stop where the source continues.
+- A quote with **"…"** (left-out words) is split at each "…". It counts as found only if **every piece** is in the source, **in the same order**, with **at most 120 characters** left out at each "…", and every piece has **at least 3 words**. This stops distant words being stitched into a new claim.
+- Found → **verified**. Not found → shown in red as "Quote not found in source", so the UI doesn't present it as proof. A page that couldn't be read is marked "source unreadable" instead.
+- The prompt also tells the model to quote one continuous run of the source's exact words, without "…" and without changing punctuation (`CITATION_INSTRUCTION` in `llm.py`).
 - The citations block is removed from the visible answer.
 
 ### Step 9 – Show the answer
@@ -229,6 +233,8 @@ GENERATION
 | Sent to the model | 5 chunks |
 | Chat history | last 20 messages, ~24,000 characters |
 | Quote length in a citation | at most 25 words |
+| Quote with "…" | each piece ≥ 3 words, ≤ 120 characters left out per "…", same order |
+| Web pages fetched to check quotes | at most 6 per answer |
 | Text kept around an image | 2 blocks before + 2 after |
 | Image render | 2× zoom, max 1600 px long side, PNG |
 | Images in memory while uploading | 4 at a time |

@@ -22,6 +22,13 @@ MARKER = "SONIA_DOCUMENT_EVIDENCE\n"
 MAX_CITATIONS = 40
 MAX_QUOTE_WORDS = 25
 MAX_FETCHES = 6
+# A quote may mark left-out words with "…" (or "..."). Each piece must then be in the source, in
+# order and close together: at most this many characters left out at each mark, and every piece
+# long enough to mean something on its own, so distant words can't be stitched into a new claim.
+MAX_OMITTED_CHARACTERS = 120
+MIN_PIECE_WORDS = 3
+_OMISSION = re.compile(r"\.{3,}")  # "…" becomes "..." once normalized (NFKC)
+_EDGE_PUNCTUATION = " .,;:!?"
 _WIDE_MARKER = re.compile(r"【(\d{1,2})】")
 _BLOCK = re.compile(r"\n*```citations[^\n]*\n(.*?)(?:\n```[^\n]*|\Z)", re.S)
 _ANSWER_URL = re.compile(r"""https?://[^\s<>()\[\]"'`*]+""", re.IGNORECASE)
@@ -56,6 +63,33 @@ def _normalized(text: str) -> str:
     text = unicodedata.normalize("NFKC", text)
     text = text.translate(str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"', "–": "-", "—": "-"}))
     return " ".join(text.casefold().split())
+
+
+def _quote_found(quote: str, text: str) -> bool:
+    """Whether the quote is the source's own words: one continuous run, or pieces split by "…".
+
+    Punctuation at either end of a piece is ignored, since a model often ends a quote with a full
+    stop the source continues past.
+    """
+    source = _normalized(text)
+    pieces = [piece.strip(_EDGE_PUNCTUATION) for piece in _OMISSION.split(_normalized(quote))]
+    pieces = [piece for piece in pieces if piece]
+    if not pieces:
+        return False
+    if len(pieces) > 1 and any(len(piece.split()) < MIN_PIECE_WORDS for piece in pieces):
+        return False
+    start = source.find(pieces[0])
+    while start != -1:
+        end = start + len(pieces[0])
+        for piece in pieces[1:]:
+            found = source.find(piece, end, end + MAX_OMITTED_CHARACTERS + len(piece))
+            if found == -1:
+                break
+            end = found + len(piece)
+        else:
+            return True
+        start = source.find(pieces[0], start + 1)
+    return False
 
 
 def _url_key(url: str) -> str:
@@ -143,7 +177,7 @@ def check_citations(answer: str, context: str, web_sources=(), evidence=()) -> t
         if citation["kind"] == "tool":
             candidates.extend(passage["text"] for passage in tool_passages(text))
         citation.update(n=number, quote=quote,
-                        verified=len(quote) >= 8 and any(_normalized(quote) in _normalized(candidate) for candidate in candidates),
+                        verified=len(quote) >= 8 and any(_quote_found(quote, candidate) for candidate in candidates),
                         source_unreadable=citation["kind"] == "web" and not text.strip())
         citations.append(citation)
     return body, sorted(citations, key=lambda item: item["n"])
