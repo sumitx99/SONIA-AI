@@ -842,6 +842,73 @@
 .demo-chart-line { fill:none; stroke:#7c8969; stroke-width:3; stroke-dasharray:1; stroke-dashoffset:1; }
 .is-ready .demo-chart-line { animation:demo-chart-draw 1.3s ease forwards; }
 .demo-chart circle { fill:#7c8969; stroke:#fff; stroke-width:2; }
+/* GenUI scenes: the same visual language as answers in the chat (series colours, controls, walkthrough).
+   Every part has a fixed size, and steps are timed in CSS, so the 210px output area never changes height. */
+.demo-genui-controls { display:flex; align-items:center; justify-content:space-between; gap:10px; height:22px; margin-top:8px; }
+.demo-genui-toggle { display:flex; gap:4px; }
+.demo-genui-toggle button { height:22px; padding:0 8px; border:1px solid #deded7; border-radius:5px; background:#fff; color:#55574c; font-size:9.5px; cursor:pointer; }
+.demo-genui-toggle button[aria-pressed="true"] { border-color:#33372c; box-shadow:inset 0 0 0 1px #33372c; color:#22251d; }
+.demo-genui-toggle button:focus-visible { outline:2px solid var(--orange); outline-offset:2px; }
+.demo-genui-legend { display:flex; gap:10px; color:#55574c; font-size:9.5px; white-space:nowrap; }
+.demo-genui-legend span { display:inline-flex; align-items:center; gap:5px; }
+.demo-genui-legend i { width:7px; height:7px; border-radius:50%; }
+.demo-genui-chart [data-series="0"] { --series:#2a78d6; }
+.demo-genui-chart [data-series="1"] { --series:#eb6834; }
+.demo-genui-legend i { background:var(--series); }
+.demo-chart.demo-genui-chart svg { max-height:118px; margin-top:6px; }
+.demo-genui-line { stroke:var(--series); stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+.demo-genui-chart circle { fill:var(--series); }
+.demo-genui-area { fill:var(--series); opacity:.1; }
+.demo-genui-steps { display:inline-flex; flex:none; align-items:center; gap:5px; }
+/* Steps are stacked in one grid cell: the box is as wide and tall as its largest step in any font,
+   and stays that size while steps fade in and out. */
+.demo-genui-count, .demo-genui-caption { display:grid; }
+.demo-genui-count { flex:none; white-space:nowrap; text-align:right; }
+.demo-genui-count > span, .demo-genui-caption > p { grid-area:1 / 1; opacity:0; }
+.demo-chart.demo-genui-diagram svg { width:100%; max-height:96px; display:block; margin:6px 0 0; }
+.demo-genui-diagram svg text { font:10px sans-serif; fill:#33372c; }
+.demo-genui-diagram svg .demo-genui-detail { font-size:8.5px; fill:#85857a; }
+.demo-genui-group rect { fill:#fafaf7; stroke:#d9dece; stroke-dasharray:4 3; }
+.demo-genui-group text { font-size:8.5px !important; fill:#85857a !important; }
+.demo-genui-edge path { fill:none; stroke:#b4b8a8; stroke-width:1.5; }
+.demo-genui-edge[data-dashed] path { stroke-dasharray:4 4; }
+.demo-genui-edge text { font-size:8.5px !important; fill:#77786d !important; }
+.demo-genui-edge rect { fill:#fff; }
+.demo-genui-diagram marker path { fill:#7c8969; }
+.demo-genui-node > :is(rect, path:not(.demo-genui-inner)) { fill:#fff; stroke:#9ea391; stroke-width:1.2; }
+.demo-genui-node[data-kind="external"] > rect { stroke-dasharray:5 3; }
+.demo-genui-inner { fill:none; stroke:#9ea391; stroke-width:1.2; }
+.demo-genui-caption { margin-top:6px; font-size:11px; line-height:1.35; color:#33372c; }
+.demo-genui-caption > p { margin:0; }
+/* Final state (also shown with reduced motion): step 3 of 3, every flow edge taken. */
+.demo-genui-count > [data-step="3"], .demo-genui-caption > [data-step="3"] { opacity:1; }
+.demo-genui-edge path { stroke:#536143; stroke-width:2; }
+.demo-genui-node[data-step~="3"] > :is(rect, path:not(.demo-genui-inner)) { stroke:#536143; stroke-width:2; filter:drop-shadow(0 0 4px #7c896966); }
+/* Timeline once the answer is ready: steps start at 0.4s and last 1.6s each (5.2s in all). */
+.is-ready .demo-genui-count > *, .is-ready .demo-genui-caption > * { animation:5.2s linear both; }
+.is-ready .demo-genui-count > [data-step="1"], .is-ready .demo-genui-caption > [data-step="1"] { animation-name:demo-step-1; }
+.is-ready .demo-genui-count > [data-step="2"], .is-ready .demo-genui-caption > [data-step="2"] { animation-name:demo-step-2; }
+.is-ready .demo-genui-count > [data-step="3"], .is-ready .demo-genui-caption > [data-step="3"] { animation-name:demo-step-3; }
+.is-ready .demo-genui-edge path { animation:5.2s ease both; }
+.is-ready .demo-genui-edge[data-step="1"] path { animation-name:demo-edge-1; }
+.is-ready .demo-genui-edge[data-step="2"] path { animation-name:demo-edge-2; }
+.is-ready .demo-genui-edge[data-step="3"] path { animation-name:demo-edge-3; }
+.is-ready .demo-genui-node > :is(rect, path:not(.demo-genui-inner)) { animation:5.2s ease both; }
+.is-ready .demo-genui-node[data-step="1"] > :is(rect, path:not(.demo-genui-inner)) { animation-name:demo-focus-1; }
+.is-ready .demo-genui-node[data-step="1 2"] > :is(rect, path:not(.demo-genui-inner)) { animation-name:demo-focus-12; }
+.is-ready .demo-genui-node[data-step="2 3"] > :is(rect, path:not(.demo-genui-inner)) { animation-name:demo-focus-23; }
+.is-ready .demo-genui-node[data-step="3"] > :is(rect, path:not(.demo-genui-inner)) { animation-name:demo-focus-3; }
+.feature-preview.is-paused .demo-output * { animation-play-state:paused !important; }
+@keyframes demo-step-1 { 0%, 38.4% { opacity:1; } 38.5%, 100% { opacity:0; } }
+@keyframes demo-step-2 { 0%, 38.4% { opacity:0; } 38.5%, 69.1% { opacity:1; } 69.2%, 100% { opacity:0; } }
+@keyframes demo-step-3 { 0%, 69.1% { opacity:0; } 69.2%, 100% { opacity:1; } }
+@keyframes demo-edge-1 { 0%, 7.6% { stroke:#b4b8a8; stroke-width:1.5; } 11%, 100% { stroke:#536143; stroke-width:2; } }
+@keyframes demo-edge-2 { 0%, 38.4% { stroke:#b4b8a8; stroke-width:1.5; } 42%, 100% { stroke:#536143; stroke-width:2; } }
+@keyframes demo-edge-3 { 0%, 69.1% { stroke:#b4b8a8; stroke-width:1.5; } 73%, 100% { stroke:#536143; stroke-width:2; } }
+@keyframes demo-focus-1 { 0%, 7.6% { stroke:#9ea391; stroke-width:1.2; filter:none; } 11%, 36% { stroke:#536143; stroke-width:2; filter:drop-shadow(0 0 4px #7c896966); } 40%, 100% { stroke:#9ea391; stroke-width:1.2; filter:none; } }
+@keyframes demo-focus-12 { 0%, 7.6% { stroke:#9ea391; stroke-width:1.2; filter:none; } 11%, 67% { stroke:#536143; stroke-width:2; filter:drop-shadow(0 0 4px #7c896966); } 71%, 100% { stroke:#9ea391; stroke-width:1.2; filter:none; } }
+@keyframes demo-focus-23 { 0%, 38.4% { stroke:#9ea391; stroke-width:1.2; filter:none; } 42%, 100% { stroke:#536143; stroke-width:2; filter:drop-shadow(0 0 4px #7c896966); } }
+@keyframes demo-focus-3 { 0%, 69.1% { stroke:#9ea391; stroke-width:1.2; filter:none; } 73%, 100% { stroke:#536143; stroke-width:2; filter:drop-shadow(0 0 4px #7c896966); } }
 .demo-research-status { display:flex; gap:8px; align-items:center; font-size:10px; padding-bottom:12px; }
 .demo-research-status > span { flex:1; }
 .demo-research-result { display:flex; gap:16px; align-items:center; }
@@ -873,11 +940,13 @@
   .demo-research-image { flex-basis:90px; height:128px; }
   .demo-research-result { gap:10px; }
   .demo-chart, .demo-research, .demo-mcp { padding:11px; }
+  .demo-genui-legend { display:none; }
 }
 @media(prefers-reduced-motion:reduce) {
   .demo-output { transition:none; }
   .is-ready .demo-chart-line { animation:none; stroke-dashoffset:0; }
   .is-ready .demo-research > div { animation:none; }
+  .is-ready :is(.demo-genui-count, .demo-genui-caption) > *, .is-ready .demo-genui-edge path, .is-ready .demo-genui-node > :is(rect, path) { animation:none; }
 }
 .studio-demo-caption a {
   display: flex;
