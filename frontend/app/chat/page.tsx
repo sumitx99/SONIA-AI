@@ -16,7 +16,10 @@ import {
   ArrowUp,
   ArrowUpRight,
   Check,
+  ChevronDown,
   FileText,
+  Folder,
+  FolderInput,
   Menu,
   MessageSquare,
   Paperclip,
@@ -31,6 +34,10 @@ import {
 } from "lucide-react";
 import { Brand, Emblem } from "@/components/brand";
 import { AccountMenu } from "@/components/account/account-menu";
+import { ProjectDialog } from "@/components/chat/project-dialog";
+import { ProjectView } from "@/components/chat/project-view";
+import projectStyles from "@/components/chat/projects.module.css";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { DocumentImageGallery } from "@/components/chat/document-image";
 import { GeneratedImageGallery } from "@/components/chat/generated-images";
 import { PromptComposer } from "@/components/chat/prompt-composer";
@@ -39,8 +46,9 @@ import { GenUIRenderer } from "@/components/chat/genui/renderer";
 import { parseGenUI } from "@/lib/genui";
 import { MarkdownMessage } from "@/components/chat/markdown-message";
 import { ToolCalls, WebSources } from "@/components/chat/tool-calls";
-import { streamMessage, uploadPDF, waitForDocumentImages, deleteConversation, handleApiError, type ImageAttachment,
-  type ChatMessage as Message, type InlineGroundingCitation, type ToolCall } from "@/lib/api";
+import { streamMessage, uploadPDF, waitForDocumentImages, deleteConversation, handleApiError, listProjects,
+  moveConversation, type ImageAttachment, type ChatMessage as Message, type ChatSession, type InlineGroundingCitation,
+  type Project, type ToolCall } from "@/lib/api";
 import { applyInlineGroundingCitations } from "@/lib/markdown/inline-grounding";
 import { isImageUrl } from "@/lib/markdown/image-url";
 import { conversationHistory, editConversation } from "@/lib/chat-context";
@@ -74,6 +82,23 @@ export default function SoniaChatInterface() {
   const { sessions, setSessions, loaded: historyLoaded, error: historyError,
     setError: setHistoryError, retry: retryHistory } = useConversations(session?.user.id);
   const [currentId, setCurrentId] = useState<string | null>(null);
+  // A new conversation is only a blank draft until its first message or upload creates it.
+  const [drafting, setDrafting] = useState(false);
+  // The project whose page is open; a chat drafted there is created inside it.
+  const [projectView, setProjectView] = useState<string | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectsError, setProjectsError] = useState("");
+  const [projectDialogOpen, setProjectDialogOpen] = useState(false);
+  const [projectsOpen, setProjectsOpen] = useState(true);
+  useEffect(() => {
+    try { setProjectsOpen(localStorage.getItem("sonia-projects-open") !== "false"); } catch { /* Browser storage is optional. */ }
+  }, []);
+  function toggleProjects() {
+    const next = !projectsOpen;
+    setProjectsOpen(next);
+    try { localStorage.setItem("sonia-projects-open", String(next)); } catch { /* Keep the toggle usable without storage. */ }
+  }
+  const [moveError, setMoveError] = useState("");
   const [input, setInput] = useState("");
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editedPrompt, setEditedPrompt] = useState("");
@@ -109,6 +134,9 @@ export default function SoniaChatInterface() {
   const end = useRef<HTMLDivElement>(null);
   const busy = useRef(false);
   const current = sessions.find((session) => session.id === currentId);
+  const viewedProject = !current && projectView ? projects.find(project => project.id === projectView) : undefined;
+  const currentProject = current?.projectId ? projects.find(project => project.id === current.projectId) : undefined;
+  const looseChats = sessions.filter(chat => !chat.projectId);
   const messages = current?.messages ?? [];
   const answeringHere = !!generatingId && generatingId === currentId;
   const resumeAvailable = !!stopped && stopped.id === currentId && !generatingId && !pending;
@@ -117,12 +145,19 @@ export default function SoniaChatInterface() {
   const composerActionLabel = answeringHere ? "Stop answering" : canResume ? "Resume answer" : "Send message";
   const toolStepCount = messages[messages.length - 1]?.tool_calls?.length ?? 0;
 
-  useEffect(() => { setCurrentId(null); setDeleteTarget(null); setStopped(null); return () => answerController.current?.abort(); }, [session?.user.id]);
+  function loadProjects() {
+    if (!session) return;
+    setProjectsError("");
+    listProjects(session.user.id).then(setProjects).catch(error => setProjectsError(handleApiError(error)));
+  }
+  useEffect(() => { setProjects([]); setProjectView(null); loadProjects(); }, [session?.user.id]);
 
-  // Open the latest chat once history arrives, unless a new prompt is already being drafted.
+  useEffect(() => { setCurrentId(null); setDrafting(false); setDeleteTarget(null); setStopped(null); return () => answerController.current?.abort(); }, [session?.user.id]);
+
+  // Open the latest chat once history arrives, unless a new conversation is being drafted.
   useEffect(() => {
-    if (historyLoaded && !currentId && sessions.length && !input.trim()) setCurrentId(sessions[0].id);
-  }, [historyLoaded, currentId, sessions, input]);
+    if (historyLoaded && !currentId && !drafting && sessions.length && !input.trim()) setCurrentId(sessions[0].id);
+  }, [historyLoaded, currentId, drafting, sessions, input]);
 
   // Signed-out visitors (or an expired session) go to the sign-in page.
   useEffect(() => {
@@ -135,17 +170,26 @@ export default function SoniaChatInterface() {
 
   useEffect(() => { setEditingMessageId(null); setEditedPrompt(""); }, [currentId]);
 
-  function newChat() {
-    const id = crypto.randomUUID();
-    setSessions((previous) => [
-      { id, title: "Untitled conversation", messages: [], documents: [], documentIds: [] },
-      ...previous,
-    ]);
-    setCurrentId(id);
+  /** Opens a blank draft: a new chat, or with projectId a new chat on that project's page. */
+  function newChat(projectId: string | null = null) {
+    setDrafting(true);
+    setProjectView(projectId);
+    setCurrentId(null);
     setInput("");
     setFileError("");
     setSidebarOpen(false);
     promptEditor.current?.focus();
+  }
+
+  function createChat() {
+    const id = crypto.randomUUID();
+    const projectId = projectView && projects.some(project => project.id === projectView) ? projectView : null;
+    setSessions((previous) => [
+      { id, title: "Untitled conversation", messages: [], documents: [], documentIds: [], projectId },
+      ...previous,
+    ]);
+    setCurrentId(id);
+    setDrafting(false);
     return id;
   }
 
@@ -190,7 +234,8 @@ export default function SoniaChatInterface() {
     const controller = new AbortController();
     answerController.current = controller;
     setStopped(null);
-    const id = currentId ?? newChat();
+    const projectId = current ? current.projectId ?? null : viewedProject?.id ?? null;
+    const id = currentId ?? createChat();
     const branch = replacement ? editConversation(messages, replacement.messageId, query) : null;
     const before = branch?.before ?? (continuation && !continuation.hasText
       ? messages.slice(0, messages.findLastIndex(message => message.sender === "user")) : messages);
@@ -283,7 +328,7 @@ export default function SoniaChatInterface() {
           text = applyInlineGroundingCitations(rawText, inlineCitations);
           update({ content: text, citations });
         },
-      }, conversationHistory(before), controller.signal);
+      }, conversationHistory(before), controller.signal, { chatId: id, projectId });
       controller.signal.throwIfAborted();
       toolCalls = toolCalls.map(call => call.status === "running" ? { ...call, status: cutOff ? "error" as const : "done" as const } : call);
       update({
@@ -327,7 +372,7 @@ export default function SoniaChatInterface() {
     }
     setFileError("");
     busy.current = true;
-    const id = currentId ?? newChat();
+    const id = currentId ?? createChat();
     setPending({ id, kind: "upload" });
     try {
       const response = await uploadPDF(file, id, setUploadStatus);
@@ -387,6 +432,58 @@ export default function SoniaChatInterface() {
     }
     setDeleteTarget(null);
     setDeleting(false);
+  }
+
+  function openChat(id: string) {
+    setCurrentId(id);
+    setDrafting(false);
+    setProjectView(null);
+    setInput("");
+    setFileError("");
+    setSidebarOpen(false);
+  }
+
+  /** Projects a chat may move to: never into or out of a project with project-only memory. */
+  function moveTargets(chat: ChatSession) {
+    const from = projects.find(project => project.id === chat.projectId);
+    if (from?.memoryMode === "project_only") return null;
+    return projects.filter(project => project.id !== chat.projectId && project.memoryMode !== "project_only");
+  }
+
+  async function move(chat: ChatSession, projectId: string | null) {
+    setMoveError("");
+    try {
+      await moveConversation(chat.id, projectId);
+      setSessions(previous => previous.map(item => item.id === chat.id ? { ...item, projectId } : item));
+    } catch (error) {
+      setMoveError(`“${chat.title}” couldn’t be moved. ${handleApiError(error)}`);
+    }
+  }
+
+  function moveMenu(chat: ChatSession) {
+    const targets = moveTargets(chat);
+    if (!targets || (!targets.length && !chat.projectId)) return null;
+    return <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button className="icon-button" aria-label={`Move ${chat.title} to a project`} disabled={pending?.id === chat.id}>
+          <FolderInput size={13} />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent className={projectStyles.moveMenu} align="start" sideOffset={6}>
+        {!!targets.length && <div className={projectStyles.moveLabel}>Move to project</div>}
+        {targets.map(project => <DropdownMenuItem key={project.id} onSelect={() => { void move(chat, project.id); }}>
+          <Folder size={14} />{project.name}</DropdownMenuItem>)}
+        {chat.projectId && <DropdownMenuItem onSelect={() => { void move(chat, null); }}><X size={14} />Remove from project</DropdownMenuItem>}
+      </DropdownMenuContent>
+    </DropdownMenu>;
+  }
+
+  function projectDeleted(id: string) {
+    setProjects(previous => previous.filter(project => project.id !== id));
+    setSessions(previous => previous.filter(chat => chat.projectId !== id));
+    if (current?.projectId === id) setCurrentId(null);
+    setProjectView(null);
+    setDrafting(false);
   }
 
   function saveTitle(id: string) {
@@ -458,22 +555,47 @@ export default function SoniaChatInterface() {
               <X size={18} />
             </button>
           </div>
-          <button className="button button-ink new-chat" onClick={newChat} aria-label="New conversation" title="New conversation">
+          <button className="button button-ink new-chat" onClick={() => newChat()} aria-label="New conversation" title="New conversation">
             <Plus className="sidebar-new-plus" size={16} /><SquarePen className="sidebar-new-compose" size={21} aria-hidden="true" /><span>New conversation</span>
           </button>
+          <div className={`sidebar-section-label mono ${projectStyles.sidebarHeading}`}>
+            <button type="button" aria-expanded={projectsOpen} aria-controls="project-list" onClick={toggleProjects}>
+              <ChevronDown size={12} className={projectStyles.chevron} data-open={projectsOpen} aria-hidden="true" />
+              PROJECTS <span>{String(projects.length).padStart(2, "0")}</span>
+            </button>
+            <button type="button" aria-label="New project" title="New project" onClick={() => setProjectDialogOpen(true)}>
+              <Plus size={14} />
+            </button>
+          </div>
+          {projectsOpen && <div id="project-list" className={`session-list ${projectStyles.projectList}`}>
+            {projectsError && <div role="status" className="form-notice">
+              <p>{projectsError}</p><button type="button" className="text-link" onClick={loadProjects}>Retry</button>
+            </div>}
+            {!projects.length && !projectsError && <p className={projectStyles.projectsEmpty}>No projects yet.</p>}
+            {projects.map(project => (
+              <div key={project.id} className={`session-row ${projectView === project.id && !current || current?.projectId === project.id ? "active" : ""}`}>
+                <button className="session-select" aria-current={projectView === project.id && !current ? "page" : undefined}
+                  onClick={() => newChat(project.id)}>
+                  <Folder size={15} />
+                  <span>{project.name}</span>
+                </button>
+              </div>
+            ))}
+          </div>}
           <div className="sidebar-section-label mono">
             YOUR CONVERSATIONS{" "}
-            <span>{String(sessions.length).padStart(2, "0")}</span>
+            <span>{String(looseChats.length).padStart(2, "0")}</span>
           </div>
+          {moveError && <p role="alert" className="form-notice">{moveError}</p>}
           <div className="session-list">
-            {!sessions.length && (
+            {!looseChats.length && (
               <p className="sidebar-empty">
                 Every good discovery
                 <br />
                 starts with a question.
               </p>
             )}
-            {sessions.map((session) => (
+            {looseChats.map((session) => (
               <div
                 key={session.id}
                 className={`session-row ${session.id === currentId ? "active" : ""}`}
@@ -512,17 +634,13 @@ export default function SoniaChatInterface() {
                       aria-current={
                         session.id === currentId ? "page" : undefined
                       }
-                      onClick={() => {
-                        setCurrentId(session.id);
-                        setInput("");
-                        setFileError("");
-                        setSidebarOpen(false);
-                      }}
+                      onClick={() => openChat(session.id)}
                     >
                       <MessageSquare size={15} />
                       <span>{session.title}</span>
                     </button>
                     <div className="session-actions">
+                      {moveMenu(session)}
                       <button
                         className="icon-button"
                         aria-label={`Rename ${session.title}`}
@@ -573,10 +691,12 @@ export default function SoniaChatInterface() {
               >
                 <Menu size={20} />
               </button>
-              <span className="room-label">Workspace</span>
+              {currentProject
+                ? <button type="button" className={`room-label ${projectStyles.breadcrumb}`} onClick={() => newChat(currentProject.id)}>{currentProject.name}</button>
+                : <span className="room-label">{viewedProject ? "Projects" : "Workspace"}</span>}
               <span className="header-slash">/</span>
               <span className="header-title">
-                {current?.title ?? "A fresh perspective"}
+                {current?.title ?? viewedProject?.name ?? "A fresh perspective"}
               </span>
             </div>
             <span className="mono header-edition">SONIA / YOUR DOCUMENT COMPANION</span>
@@ -585,7 +705,15 @@ export default function SoniaChatInterface() {
             {current?.recovered && !messages.length && <p role="status" className="form-notice">
               Your uploaded documents were restored. Earlier message text was not saved by the previous version.
             </p>}
-            {!messages.length ? (
+            {viewedProject && !messages.length ? (
+              <ProjectView project={viewedProject}
+                chats={sessions.filter(chat => chat.projectId === viewedProject.id)}
+                onOpenChat={openChat}
+                onChange={project => setProjects(previous => previous.map(item => item.id === project.id ? project : item))}
+                onDeleted={projectDeleted}
+                onFilesChanged={loadProjects}
+                renderChatActions={moveMenu} />
+            ) : !messages.length ? (
               <motion.div
                 className="chat-welcome"
                 initial={{ opacity: 0, y: 15 }}
@@ -714,7 +842,7 @@ export default function SoniaChatInterface() {
                 value={input}
                 onChange={setInput}
                 onKeyDown={onKeyDown}
-                placeholder="What’s on your mind?"
+                placeholder={viewedProject ? `New chat in ${viewedProject.name}` : "What’s on your mind?"}
                 disabled={!!pending || !!generatingId}
               />
               <div className="composer-controls">
@@ -770,6 +898,8 @@ export default function SoniaChatInterface() {
           </div>
         </main>
       </div>
+      <ProjectDialog open={projectDialogOpen} onOpenChange={setProjectDialogOpen}
+        onCreated={project => { setProjects(previous => [project, ...previous]); newChat(project.id); }} />
       <AlertDialog.Root open={deleteTarget !== null} onOpenChange={open => { if (!open && !deleting) setDeleteTarget(null); }}>
         <AlertDialog.Portal>
           <AlertDialog.Overlay className={deleteStyles.overlay} />

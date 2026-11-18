@@ -128,6 +128,8 @@ export interface ChatSession {
   documentIds: number[];
   updatedAt?: string;
   recovered?: boolean;
+  /** The project the chat belongs to; set when the chat is created, changed only by a move. */
+  projectId?: string | null;
 }
 
 export async function loadConversations(userId?: string): Promise<ChatSession[]> {
@@ -139,7 +141,7 @@ export async function loadConversations(userId?: string): Promise<ChatSession[]>
 export async function saveConversation(chat: ChatSession, userId?: string) {
   const response = await apiFetch(`/conversations/${encodeURIComponent(chat.id)}`, {
     method: "PUT", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title: chat.title, messages: chat.messages }),
+    body: JSON.stringify({ title: chat.title, messages: chat.messages, ...(chat.projectId && { project_id: chat.projectId }) }),
   }, userId);
   if (!response.ok) throw await responseError(response);
 }
@@ -263,8 +265,10 @@ export interface ApiError {
   status_code?: number;
 }
 
-// Upload PDF file to backend; chatId groups its files under chats/{chatId}/ in storage
-export const uploadPDF = async (file: File, chatId?: string, onStatus?: (status: string) => void): Promise<UploadResponse> => {
+// Upload PDF file to backend; chatId groups its files under chats/{chatId}/ in storage.
+// With projectId (and no chatId) the PDF becomes a file of that project, searched in all its chats.
+export const uploadPDF = async (file: File, chatId?: string, onStatus?: (status: string) => void,
+  projectId?: string): Promise<UploadResponse> => {
   if (file.size > 25 * 1024 * 1024) throw new Error("Please upload a PDF smaller than 25 MB.");
   const requestId = crypto.randomUUID();
   // An earlier attempt may still be running (or its server may have just died): the server answers
@@ -277,6 +281,7 @@ export const uploadPDF = async (file: File, chatId?: string, onStatus?: (status:
     const formData = new FormData();
     formData.append("file", file);
     if (chatId) formData.append("chat_id", chatId);
+    if (projectId) formData.append("project_id", projectId);
     formData.append("request_id", requestId);
     onStatus?.(attempt ? "Reconnecting and retrying your upload…" : "Reading your PDF. The service may take a minute to wake up…");
 
@@ -319,8 +324,17 @@ export const uploadPDF = async (file: File, chatId?: string, onStatus?: (status:
   throw new Error("The document service could not be reached. Please try again.");
 };
 
+/** Which chat an answer is for: the backend adds its project's files, instructions and memory. */
+export interface AnswerTarget { chatId?: string; projectId?: string | null }
+
+function appendTarget(formData: FormData, target?: AnswerTarget) {
+  if (target?.chatId) formData.append("chat_id", target.chatId);
+  if (target?.projectId) formData.append("project_id", target.projectId);
+}
+
 // Send chat message to backend
-export const sendMessage = async (query: string, documentIds?: number[], history: { sender: "user" | "bot"; content: string }[] = [], signal?: AbortSignal): Promise<ChatResponse> => {
+export const sendMessage = async (query: string, documentIds?: number[], history: { sender: "user" | "bot"; content: string }[] = [], signal?: AbortSignal,
+  target?: AnswerTarget): Promise<ChatResponse> => {
   try {
     const formData = new FormData();
     formData.append("query", query);
@@ -329,6 +343,7 @@ export const sendMessage = async (query: string, documentIds?: number[], history
       formData.append("scope_documents", "true");
       documentIds.forEach((id) => formData.append("document_ids", String(id)));
     }
+    appendTarget(formData, target);
 
     const response = await apiFetch("/chat", {
       method: "POST",
@@ -375,6 +390,7 @@ export const streamMessage = async (
   query: string, documentIds: number[] | undefined, handlers: StreamHandlers,
   history: { sender: "user" | "bot"; content: string }[] = [],
   signal?: AbortSignal,
+  target?: AnswerTarget,
 ): Promise<{ cutOff: boolean }> => {
   const formData = new FormData();
   formData.append("query", query);
@@ -383,11 +399,12 @@ export const streamMessage = async (
     formData.append("scope_documents", "true");
     documentIds.forEach((id) => formData.append("document_ids", String(id)));
   }
+  appendTarget(formData, target);
   const response = await apiFetch("/chat/stream", { method: "POST", body: formData, signal });
 
   // An API deployed before streaming existed: fall back to the one-shot endpoint.
   if (response.status === 404) {
-    const { answer, citations, web_images, ui_spec, ui_incomplete, ...meta } = await sendMessage(query, documentIds, history, signal);
+    const { answer, citations, web_images, ui_spec, ui_incomplete, ...meta } = await sendMessage(query, documentIds, history, signal, target);
     signal?.throwIfAborted();
     handlers.onMeta?.(meta);
     handlers.onDelta(answer);
@@ -515,6 +532,89 @@ export async function deleteAvatar(userId: string): Promise<AccountProfile> {
   const response = await apiFetch("/profile/avatar", { method: "DELETE" }, userId);
   if (!response.ok) throw await responseError(response);
   return response.json();
+}
+
+// --- Projects: chats grouped with shared instructions, files and a fixed memory mode ---
+
+export type MemoryMode = "default" | "project_only";
+export interface ProjectFile { id: number; filename: string }
+export interface Project {
+  id: string;
+  name: string;
+  instructions: string;
+  memoryMode: MemoryMode;
+  createdAt: string;
+  updatedAt: string;
+  documents: ProjectFile[];
+}
+
+async function json<T>(response: Response): Promise<T> {
+  if (!response.ok) throw await responseError(response);
+  return response.json();
+}
+const jsonBody = (method: string, body: unknown): RequestInit =>
+  ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+export async function listProjects(userId?: string): Promise<Project[]> {
+  return (await json<{ projects: Project[] }>(await apiFetch("/projects", { cache: "no-store" }, userId))).projects;
+}
+export async function createProject(name: string, memoryMode: MemoryMode): Promise<Project> {
+  return json(await apiFetch("/projects", jsonBody("POST", { name, memory_mode: memoryMode })));
+}
+export async function updateProject(id: string, changes: { name?: string; instructions?: string }): Promise<Project> {
+  return json(await apiFetch(`/projects/${encodeURIComponent(id)}`, jsonBody("PATCH", changes)));
+}
+export async function deleteProject(id: string): Promise<void> {
+  await json(await apiFetch(`/projects/${encodeURIComponent(id)}`, { method: "DELETE" }));
+}
+export async function deleteProjectFile(projectId: string, documentId: number): Promise<void> {
+  await json(await apiFetch(`/projects/${encodeURIComponent(projectId)}/documents/${documentId}`, { method: "DELETE" }));
+}
+export async function moveConversation(chatId: string, projectId: string | null): Promise<void> {
+  await json(await apiFetch(`/conversations/${encodeURIComponent(chatId)}/project`, jsonBody("PATCH", { project_id: projectId })));
+}
+
+// --- Memory: what Sonia remembers across chats (account-wide, or one project-only project) ---
+
+export interface MemoryItem { id: number; action: "remember" | "forget"; content: string; createdAt: string }
+export type MemorySection = "you" | "topics" | "areas" | "people";
+export interface MemoryEntry {
+  id: number; section: MemorySection; title: string; description: string; content: string; updatedAt: string;
+}
+export interface MemoryOverview {
+  enabled: boolean;
+  updatedAt: string | null;
+  /** True while a change is waiting to be folded into the entries. */
+  updating: boolean;
+  entries: MemoryEntry[];
+  edits: MemoryItem[];
+  /** Account memory only: each project-only project's separate memory. */
+  projects: { id: string; name: string; entries: MemoryEntry[] }[];
+}
+
+const memoryPath = (path: string, projectId?: string) =>
+  `/memory${path}${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`;
+
+export async function loadMemory(projectId?: string): Promise<MemoryOverview> {
+  return json(await apiFetch(memoryPath("", projectId), { cache: "no-store" }));
+}
+export async function setMemoryEnabled(enabled: boolean): Promise<void> {
+  await json(await apiFetch("/memory/settings", jsonBody("PUT", { enabled })));
+}
+export async function addMemoryItem(content: string, projectId?: string): Promise<MemoryItem> {
+  return json(await apiFetch(memoryPath("/edits", projectId), jsonBody("POST", { action: "remember", content })));
+}
+export async function deleteMemoryItem(id: number, projectId?: string): Promise<void> {
+  await json(await apiFetch(memoryPath(`/edits/${id}`, projectId), { method: "DELETE" }));
+}
+export async function deleteMemoryEntry(id: number, projectId?: string): Promise<void> {
+  await json(await apiFetch(memoryPath(`/entries/${id}`, projectId), { method: "DELETE" }));
+}
+export async function refreshMemory(projectId?: string): Promise<MemoryOverview> {
+  return json(await apiFetch(memoryPath("/refresh", projectId), { method: "POST" }));
+}
+export async function resetMemory(projectId?: string): Promise<MemoryOverview> {
+  return json(await apiFetch(memoryPath("", projectId), { method: "DELETE" }));
 }
 
 // Approve or decline a tool call an answer is waiting on.

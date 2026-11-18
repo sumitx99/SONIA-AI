@@ -92,16 +92,20 @@ async def ensure_document_schema():
             ALTER TABLE documents ADD COLUMN IF NOT EXISTS upload_heartbeat_at TIMESTAMPTZ;
             ALTER TABLE documents ADD COLUMN IF NOT EXISTS images_status TEXT;
             ALTER TABLE documents ADD COLUMN IF NOT EXISTS images_stored INTEGER;
+            -- Project files belong to a project rather than one chat (chat_id is then NULL).
+            ALTER TABLE documents ADD COLUMN IF NOT EXISTS project_id TEXT;
             CREATE UNIQUE INDEX IF NOT EXISTS documents_upload_request_idx
                 ON documents(user_id, upload_request_id) WHERE upload_request_id IS NOT NULL;
             CREATE INDEX IF NOT EXISTS documents_user_idx ON documents(user_id);
             ALTER TABLE documents ALTER COLUMN file DROP NOT NULL;
             CREATE INDEX IF NOT EXISTS documents_chat_idx ON documents(chat_id);
+            CREATE INDEX IF NOT EXISTS documents_project_idx ON documents(user_id, project_id)
+                WHERE project_id IS NOT NULL;
         """)
     _document_schema_ready = True
 
 
-async def insert_file(filename, file_bytes, chat_id=None, user_id=None, request_id=None):
+async def insert_file(filename, file_bytes, chat_id=None, user_id=None, request_id=None, project_id=None):
     """Inserts a file into the documents table and returns its ID.
 
     Pass file_bytes=None when the PDF itself is stored in R2 (see set_document_source_key).
@@ -109,8 +113,9 @@ async def insert_file(filename, file_bytes, chat_id=None, user_id=None, request_
     await ensure_document_schema()
     async with (await get_pool()).acquire() as conn:
         return await conn.fetchval(
-            "INSERT INTO documents (filename, file, chat_id, user_id, upload_request_id, upload_heartbeat_at) "
-            "VALUES ($1, $2, $3, $4, $5, now()) RETURNING id", filename, file_bytes, chat_id, user_id, request_id)
+            "INSERT INTO documents (filename, file, chat_id, user_id, upload_request_id, upload_heartbeat_at, project_id) "
+            "VALUES ($1, $2, $3, $4, $5, now(), $6) RETURNING id",
+            filename, file_bytes, chat_id, user_id, request_id, project_id)
 
 
 async def completed_upload(user_id, request_id):

@@ -36,6 +36,9 @@ async def ensure_conversation_schema():
                 PRIMARY KEY (user_id, id)
             );
             ALTER TABLE conversations ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE conversations ADD COLUMN IF NOT EXISTS project_id TEXT;
+            CREATE INDEX IF NOT EXISTS conversations_project_idx ON conversations(user_id, project_id)
+                WHERE project_id IS NOT NULL;
         """)
     _schema_ready = True
 
@@ -109,6 +112,12 @@ class SavedMessage(BaseModel):
 class ConversationInput(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     messages: list[SavedMessage] = Field(default_factory=list, max_length=1000)
+    # Only used when the chat is first saved; moving a chat uses PATCH /{chat_id}/project.
+    project_id: str | None = Field(None, max_length=64)
+
+
+class ProjectMove(BaseModel):
+    project_id: str | None = Field(None, max_length=64)
 
 
 @router.get("")
@@ -119,11 +128,11 @@ async def list_conversations(user_id: str = Depends(current_user)):
     await ensure_conversation_schema()
     async with (await get_pool()).acquire() as conn:
         saved = await conn.fetch(
-            "SELECT id, title, messages, updated_at, deleted_at FROM conversations "
+            "SELECT id, title, messages, updated_at, deleted_at, project_id FROM conversations "
             "WHERE user_id = $1 ORDER BY updated_at DESC", user_id)
         documents = await conn.fetch("""
             SELECT id, filename, chat_id, uploaded_at FROM documents d
-            WHERE user_id = $1 AND EXISTS
+            WHERE user_id = $1 AND project_id IS NULL AND EXISTS
                 (SELECT 1 FROM document_chunks c WHERE c.document_id = d.id)
             ORDER BY uploaded_at DESC
         """, user_id)
@@ -140,6 +149,7 @@ async def list_conversations(user_id: str = Depends(current_user)):
             for image in message.get("images", []):
                 image["url"] = ""
         history[row["id"]] = {"id": row["id"], "title": row["title"], "messages": messages,
+                              "projectId": row.get("project_id"),
                               "documents": [], "documentIds": [],
                               "updatedAt": row["updated_at"].isoformat(), "recovered": False}
     for document in documents:
@@ -147,7 +157,7 @@ async def list_conversations(user_id: str = Depends(current_user)):
         if chat_id in hidden:
             continue
         if chat_id not in history:
-            history[chat_id] = {"id": chat_id, "title": document["filename"], "messages": [],
+            history[chat_id] = {"id": chat_id, "title": document["filename"], "messages": [], "projectId": None,
                                 "documents": [], "documentIds": [], "recovered": True,
                                 "updatedAt": document["uploaded_at"].isoformat()}
         history[chat_id]["documents"].append(document["filename"])
@@ -184,20 +194,63 @@ async def save_conversation(chat_id: str, payload: ConversationInput, user_id: s
     if len(messages.encode()) > 2_000_000:
         raise HTTPException(413, "This conversation is too large. Start a new conversation.")
     await ensure_conversation_schema()
+    project_id = None
+    if payload.project_id is not None:
+        from app.api.projects import get_project
+        if not await get_project(user_id, payload.project_id):
+            raise HTTPException(404, "Project not found")
+        project_id = payload.project_id
     async with (await get_pool()).acquire() as conn:
-        # Soft-deleted chats cannot be resurrected by a delayed auto-save.
-        updated = await conn.fetchval("""
-            INSERT INTO conversations(user_id, id, title, messages)
-            VALUES ($1, $2, $3, $4::jsonb)
+        # Soft-deleted chats cannot be resurrected by a delayed auto-save. The project is set
+        # only when the chat is created, so a delayed save cannot undo a move.
+        columns, values = ("messages", "$4::jsonb") if project_id is None else \
+            ("messages, project_id", "$4::jsonb, $5")
+        updated = await conn.fetchval(f"""
+            INSERT INTO conversations(user_id, id, title, {columns})
+            VALUES ($1, $2, $3, {values})
             ON CONFLICT(user_id, id) DO UPDATE
                 SET title = EXCLUDED.title, messages = EXCLUDED.messages, updated_at = now()
                 WHERE conversations.deleted_at IS NULL
             RETURNING updated_at
-        """, user_id, chat_id, payload.title, messages)
+        """, user_id, chat_id, payload.title, messages, *([project_id] if project_id else []))
     if updated is None:
         raise HTTPException(409, "This conversation was deleted")
     await invalidate_conversations(user_id)
+    from app.services.memory import schedule_indexing
+    schedule_indexing(user_id)
     return {"updatedAt": updated.isoformat()}
+
+
+@router.patch("/{chat_id}/project")
+async def move_conversation(chat_id: str, payload: ProjectMove, user_id: str = Depends(current_user)):
+    """Moves a saved chat into a project or out of one.
+
+    Chats never cross a project-only boundary: what was said inside such a project stays
+    there, and outside chats are not pulled into its separate memory.
+    """
+    if not valid_chat_id(chat_id):
+        raise HTTPException(422, "Invalid conversation ID")
+    from app.api.projects import get_project
+    target = await get_project(user_id, payload.project_id) if payload.project_id else None
+    if payload.project_id and not target:
+        raise HTTPException(404, "Project not found")
+    await ensure_conversation_schema()
+    async with (await get_pool()).acquire() as conn:
+        current = await conn.fetchrow(
+            "SELECT project_id FROM conversations WHERE user_id = $1 AND id = $2 AND deleted_at IS NULL",
+            user_id, chat_id)
+        if current is None:
+            raise HTTPException(404, "Conversation not found")
+        source = await get_project(user_id, current["project_id"]) if current["project_id"] else None
+        if source and source["id"] == payload.project_id:
+            return {"projectId": payload.project_id}
+        if any(project and project["memory_mode"] == "project_only" for project in (source, target)):
+            raise HTTPException(409, "Chats can't be moved into or out of a project with project-only memory.")
+        await conn.execute(
+            "UPDATE conversations SET project_id = $3, updated_at = now() WHERE user_id = $1 AND id = $2",
+            user_id, chat_id, payload.project_id)
+    await invalidate_conversations(user_id)
+    return {"projectId": payload.project_id}
 
 
 @router.delete("/{chat_id}")
@@ -211,5 +264,9 @@ async def delete_conversation(chat_id: str, user_id: str = Depends(current_user)
             VALUES ($1, $2, 'Deleted conversation', now())
             ON CONFLICT(user_id, id) DO UPDATE SET deleted_at = now(), updated_at = now()
         """, user_id, chat_id)
+    # Past-chat search and memory skip deleted chats at once; the next indexing pass and
+    # summary rebuild remove what they kept of it.
     await invalidate_conversations(user_id)
+    from app.services.memory import schedule_indexing
+    schedule_indexing(user_id)
     return {"deleted": True}

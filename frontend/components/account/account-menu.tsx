@@ -1,18 +1,20 @@
 "use client";
 
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
-import { ChevronRight, Ellipsis, HelpCircle, Loader2, LogOut, Plug, Settings, SlidersHorizontal, Upload, UserRound } from "lucide-react";
+import { Brain, ChevronRight, Ellipsis, HelpCircle, Loader2, LogOut, Plug, Settings, SlidersHorizontal, Upload, UserRound } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { ConnectionsPanel } from "@/components/account/connections-panel";
+import { MemoryPanel } from "@/components/account/memory-panel";
 import { AppearanceSettings } from "@/components/theme-switch";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { deleteAvatar, loadProfile, updateProfile, uploadAvatar, type AccountProfile, type ProfileDetails } from "@/lib/api";
 
 const empty: AccountProfile = { display_name: "", bio: "", reduce_motion: false, compact_mode: false, avatar_url: null, avatar_expires_at: null };
-type Section = "profile" | "personalization" | "settings" | "connections" | "help";
+type Section = "profile" | "personalization" | "memory" | "settings" | "connections" | "help";
 const sections = [
   { id: "profile" as const, title: "Profile", icon: UserRound },
   { id: "personalization" as const, title: "Personalization", icon: SlidersHorizontal },
+  { id: "memory" as const, title: "Memory", icon: Brain },
   { id: "settings" as const, title: "Settings", icon: Settings },
   { id: "connections" as const, title: "Connections", icon: Plug },
   { id: "help" as const, title: "Help", icon: HelpCircle },
@@ -96,7 +98,7 @@ export function AccountMenu({ userId, email, initialName, onSignOut, onPreferenc
           {avatar()}<span><strong>{displayName}</strong><small>{email}</small></span><ChevronRight size={16} />
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        {sections.slice(0, 4).map(item => <DropdownMenuItem key={item.id} onSelect={() => open(item.id)}><item.icon size={18} />{item.title}</DropdownMenuItem>)}
+        {sections.slice(0, 5).map(item => <DropdownMenuItem key={item.id} onSelect={() => open(item.id)}><item.icon size={18} />{item.title}</DropdownMenuItem>)}
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => open("help")}><HelpCircle size={18} />Help<ChevronRight size={15} className="account-menu-chevron" /></DropdownMenuItem>
         <DropdownMenuSeparator />
@@ -119,6 +121,7 @@ export function AccountMenu({ userId, email, initialName, onSignOut, onPreferenc
               </>}
               {section === "personalization" && <><AppearanceSettings /><h3>Make space for your way of working.</h3><p className="account-section-copy">These display preferences follow your account.</p><label className="account-preference"><span><strong>Compact conversations</strong><small>Show more conversations in the sidebar.</small></span><input type="checkbox" checked={draft.compact_mode} disabled={busy} onChange={event => setDraft({...draft, compact_mode:event.target.checked})} /></label><label className="account-preference"><span><strong>Reduce motion</strong><small>Use a calmer workspace with fewer animations.</small></span><input type="checkbox" checked={draft.reduce_motion} disabled={busy} onChange={event => setDraft({...draft, reduce_motion:event.target.checked})} /></label></>}
               {section === "settings" && <><h3>Account &amp; history</h3><div className="account-info-block"><span>Signed in as</span><strong>{email}</strong></div><div className="account-info-block"><span>Chat history</span><p>New conversations, questions and answers are saved to this account. Use the conversation menu to rename or delete a chat.</p></div><button type="button" className="account-secondary-button" onClick={() => { void onSignOut(); }}><LogOut size={15} />Log out of Sonia</button></>}
+              {section === "memory" && <MemoryPanel />}
               {section === "connections" && <ConnectionsPanel />}
               {section === "help" && <div className="account-help"><h3>A few things to know.</h3><details open><summary>How do I start?</summary><p>Choose New conversation, add a PDF, and ask a question about it. PDFs can be up to 25 MB.</p></details><details><summary>Where is my history?</summary><p>Your saved conversations appear in the sidebar when you sign in to the same account. Older document-only chats may not contain messages from the previous version.</p></details><details><summary>How do profile photos work?</summary><p>Your uploaded photo is saved privately. You can replace or remove it in Profile at any time.</p></details></div>}
             </>}

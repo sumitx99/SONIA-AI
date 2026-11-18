@@ -11,6 +11,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import RedirectResponse, Response
 from requests.exceptions import HTTPError, RequestException
 
+from app.api.projects import get_project
 from app.core.auth import current_user
 from app.core.db import (completed_upload, delete_document, discard_unfinished_upload, document_status,
                          finish_upload, get_document_source, insert_embeddings, insert_file,
@@ -38,10 +39,16 @@ STALE_AFTER_SECONDS = 90
 
 @router.post("/upload", tags=["Document Handling"])
 async def upload_pdf(file: UploadFile = File(...), chat_id: str | None = Form(None),
-                     request_id: str | None = Form(None),
+                     request_id: str | None = Form(None), project_id: str | None = Form(None),
                      user_id: str = Depends(current_user)):
+    """Uploads a PDF to a chat, or with project_id (and no chat_id) as a file of that project."""
     if not valid_chat_id(chat_id):
         raise HTTPException(status_code=422, detail="chat_id may only contain letters, digits, '-' and '_' (max 64)")
+    if project_id is not None:
+        if chat_id is not None:
+            raise HTTPException(422, "Upload a file to a chat or to a project, not both.")
+        if not await get_project(user_id, project_id):
+            raise HTTPException(404, "Project not found")
     if request_id is not None and not valid_chat_id(request_id):
         raise HTTPException(422, "Invalid upload request ID")
     file_bytes = await file.read(MAX_UPLOAD_BYTES + 1)
@@ -55,7 +62,7 @@ async def upload_pdf(file: UploadFile = File(...), chat_id: str | None = Form(No
             cached = json.loads(cached) if isinstance(cached, str) else cached
             # Images may have finished (or failed) since this response was first sent.
             return {**cached, **(await document_status(cached["file_id"], STALE_AFTER_SECONDS) or {})}
-        return await _process_upload(file, file_bytes, chat_id, request_id, user_id)
+        return await _process_upload(file, file_bytes, chat_id, request_id, user_id, project_id)
 
 
 @asynccontextmanager
@@ -76,7 +83,7 @@ async def _heartbeat(document_id):
         task.cancel()
 
 
-async def _process_upload(file, file_bytes, chat_id, request_id, user_id):
+async def _process_upload(file, file_bytes, chat_id, request_id, user_id, project_id=None):
     """Store the PDF and make its text searchable; images follow in a background job."""
     file_id = None
     storage = None
@@ -91,7 +98,8 @@ async def _process_upload(file, file_bytes, chat_id, request_id, user_id):
         storage = R2ImageStorage.from_env()
         if request_id:
             await _discard_abandoned_attempts(user_id, request_id, storage)
-        file_id = await insert_file(file.filename, None if storage else file_bytes, chat_id, user_id, request_id)
+        file_id = await insert_file(file.filename, None if storage else file_bytes, chat_id, user_id, request_id,
+                                    **({"project_id": project_id} if project_id else {}))
         async with _heartbeat(file_id):
             prefix = document_prefix(user_id, chat_id, file_id)
             if storage:

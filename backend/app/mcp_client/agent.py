@@ -25,6 +25,7 @@ from app.services.web_activity import WebActivity, requested_urls, safe_url
 from app.services.source_reader import read_source
 from app.services.page_rendering import render_page
 from app.services.images.web_images import IMAGE_SEARCH_TOOL, configured as image_search_configured, search_and_store
+from app.services.memory import MEMORY_EDIT_TOOL, MEMORY_TOOL_NAMES, run_memory_tool
 from app.mcp_client import store
 from app.mcp_client.oauth import provider_for, needs_reauthorization
 from app.mcp_client.session import call_tool, open_session
@@ -175,9 +176,22 @@ def _grounding_annotations(grounding: dict, chunks: list, round_text: str,
     return annotations
 
 
-async def answer_with_tools(user_id: str, query: str, context: str, declarations: list, registry: dict, history=None):
-    """Yields (event, data) while answering; text arrives as "delta" events."""
-    contents = conversation_turns(query, context, history)
+# Running titles read as "Using …" in the chat's tool timeline.
+_MEMORY_TITLES = {"search_past_chats": "past-chat search", "recent_chats": "recent chats",
+                  "memory_edit": "memory"}
+
+
+async def answer_with_tools(user_id: str, query: str, context: str, declarations: list, registry: dict, history=None,
+                            background: str = "", memory=None):
+    """Yields (event, data) while answering; text arrives as "delta" events.
+
+    `background` is the labelled project instructions and memory text for the prompt; `memory`
+    (a MemoryTurn) offers the past-chat and memory tools when the user has memory on.
+    """
+    contents = conversation_turns(query, context, history, background)
+    # Once untrusted text (documents, web pages, tool or past-chat results) is in the context, a
+    # memory edit could have been planted by it, so it needs the user's approval in chat.
+    untrusted_seen = bool((context or "").strip())
     sources: dict[str, dict] = {}
     answer_text = ""
     question_urls = requested_urls(query)
@@ -222,6 +236,8 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
                 offered = offered + [READ_WEB_PAGE_TOOL]
             if image_search_configured() and image_searches < 2 and image_count < 3:
                 offered = offered + [IMAGE_SEARCH_TOOL]
+            if memory is not None:
+                offered = offered + memory.tools
         model_parts, calls, search_refused, finish_reason = [], [], False, None
         round_start = _utf16_length(answer_text)
         grounding_chunks = []
@@ -236,6 +252,7 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
                     search_refused = True
                     continue
                 if "groundingMetadata" in part:
+                    untrusted_seen = True
                     grounding = part["groundingMetadata"]
                     grounding_chunks.extend(grounding.get("groundingChunks") or [])
                     _add_sources(grounding, sources)
@@ -258,6 +275,7 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
                         yield "sources", {"sources": list(sources.values())}
                     continue
                 if "urlContextMetadata" in part:
+                    untrusted_seen = True
                     for index, item in enumerate(part["urlContextMetadata"].get("urlMetadata") or []):
                         url = safe_url(item.get("retrievedUrl"))
                         if not url:
@@ -425,6 +443,39 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
                 yield "tool_call", {**event, "status": "error" if is_error else "done",
                                     "title": "Web search unavailable" if is_error else "Searched the web",
                                     "summary": None if is_error else f"{len(links)} source links returned."}
+            elif entry is None and memory is not None and name in MEMORY_TOOL_NAMES:
+                arguments_shown = ({key: str(arguments.get(key, ""))[:300] for key in ("action", "text")}
+                                   if name == MEMORY_EDIT_TOOL["name"] else
+                                   {key: str(value)[:200] for key, value in arguments.items()
+                                    if key in ("query", "count", "before", "after")})
+                event = {"id": f"memory-{uuid.uuid4().hex[:8]}", "server": "Memory", "tool": name,
+                         "title": _MEMORY_TITLES[name], "arguments": arguments_shown}
+                approved = True
+                if not any(tool["name"] == name for tool in offered):
+                    text, is_error, approved = "This tool is not available now.", True, None
+                elif name == MEMORY_EDIT_TOOL["name"] and untrusted_seen:
+                    event["title"] = "Memory change"
+                    future = asyncio.get_running_loop().create_future()
+                    _approvals[event["id"]] = (user_id, future)
+                    yield "tool_call", {**event, "status": "awaiting_approval"}
+                    yield "approval_required", event
+                    try:
+                        approved = await asyncio.wait_for(future, APPROVAL_TIMEOUT)
+                    except asyncio.TimeoutError:
+                        approved = False
+                    finally:
+                        _approvals.pop(event["id"], None)
+                if approved is False:
+                    text, is_error = "The user declined this memory change. Do not try it again.", False
+                    yield "tool_call", {**event, "status": "denied"}
+                elif approved:
+                    yield "tool_call", {**event, "status": "running"}
+                    text, is_error, summary = await run_memory_tool(memory, name, arguments)
+                    yield "tool_call", {**event, "status": "error" if is_error else "done", "summary": summary,
+                                        "title": "Memory unavailable" if is_error else {
+                                            "search_past_chats": "Searched past chats",
+                                            "recent_chats": "Looked at recent chats",
+                                            "memory_edit": "Memory updated"}[name]}
             elif entry is None:
                 text, is_error = "Unknown tool.", True
             else:
@@ -469,4 +520,6 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
                 response["parts"] = [{"inlineData": {"mimeType": "image/jpeg",
                                                      "displayName": "desktop.jpg", "data": page_image}}]
             responses.append({"functionResponse": response})
+            if name != MEMORY_EDIT_TOOL["name"]:
+                untrusted_seen = True
         contents.append({"role": "user", "parts": responses})

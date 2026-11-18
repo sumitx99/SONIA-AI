@@ -14,6 +14,10 @@ from app.core.auth import current_user
 from app.mcp_client.agent import answer_with_tools, available_tools, resolve_approval
 from app.services.context import answer_context
 from app.services.chat_memory import parse_history
+from app.api.projects import project_document_ids
+from app.services.images.image_storage import valid_chat_id
+from app.services.memory import (MemoryTurn, chat_project, memory_context, memory_enabled, schedule_summary,
+                                 scope_for)
 from app.services.genui import GenUIStream, supported_chart
 from app.services.answer_verification import check_citations
 from app.services.llm import (NO_ANSWER, BackupUnavailable, backup_configured, gemini_access_denied, gemini_unavailable,
@@ -24,18 +28,61 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+class AnswerSetup:
+    """The chat's project and memory, as they apply to one answer."""
+
+    def __init__(self, background: str = "", memory: MemoryTurn | None = None):
+        self.background, self.memory = background, memory
+
+
+async def _answer_setup(user_id, chat_id, project_id, document_ids, scope_documents):
+    """Adds the project's files to the searched documents, and its instructions and memory to the prompt.
+
+    Memory problems never block an answer: it is then given without memory.
+    """
+    if not valid_chat_id(chat_id) or not valid_chat_id(project_id):
+        raise HTTPException(422, "Invalid conversation or project ID")
+    try:
+        project = await chat_project(user_id, chat_id, project_id)
+    except Exception:
+        logger.exception("Could not load the chat's project")
+        return document_ids, AnswerSetup()
+    background = []
+    if project:
+        if scope_documents:
+            document_ids = list(document_ids or []) + await project_document_ids(user_id, project["id"])
+        if project["instructions"].strip():
+            background.append(
+                f"Project \"{project['name']}\": instructions the user wrote for every chat in this project. "
+                "Follow them unless the current request says otherwise:\n" + project["instructions"].strip())
+    memory = None
+    try:
+        if await memory_enabled(user_id):
+            scope = scope_for(project)
+            memory = MemoryTurn(user_id, scope, chat_id, True)
+            block = await memory_context(user_id, scope)
+            if block:
+                background.append(block)
+            schedule_summary(user_id, scope)
+    except Exception:
+        logger.exception("Memory is unavailable for this answer")
+    return document_ids, AnswerSetup("\n\n".join(background), memory)
+
+
 @router.post("/chat", tags=["Chat"])
 async def chat(query: str = Form(...), document_ids: list[int] | None = Form(None),
                scope_documents: bool = Form(False), include_images: bool = Form(False),
-               user_id: str = Depends(current_user), history: str | None = Form(None)):
+               user_id: str = Depends(current_user), history: str | None = Form(None),
+               chat_id: str | None = Form(None), project_id: str | None = Form(None)):
     turns = parse_history(history)
+    document_ids, setup = await _answer_setup(user_id, chat_id, project_id, document_ids, scope_documents)
     try:
         logger.info(f"Received query: '{query}'")
         context, meta = await answer_context(query, document_ids, scope_documents, include_images, user_id)
         declarations, registry = await _load_tools(user_id)
         answer, citations, web_images, ui_spec = "", [], [], None
         ui_incomplete = False
-        async for name, data in _answer_events(user_id, query, context, declarations, registry, turns):
+        async for name, data in _answer_events(user_id, query, context, declarations, registry, turns, setup):
             if name == "citations":
                 answer, citations = data["answer"], data["citations"]
             elif name == "ui_spec":
@@ -73,7 +120,8 @@ def _sse(event: str, data: dict) -> str:
 @router.post("/chat/stream", tags=["Chat"])
 async def chat_stream(query: str = Form(...), document_ids: list[int] | None = Form(None),
                       scope_documents: bool = Form(False), include_images: bool = Form(False),
-                      user_id: str = Depends(current_user), history: str | None = Form(None)):
+                      user_id: str = Depends(current_user), history: str | None = Form(None),
+                      chat_id: str | None = Form(None), project_id: str | None = Form(None)):
     """Like /chat, but streams the answer as server-sent events while Gemini writes it.
 
     Events: `meta` (images and status, once), `delta` ({"text"}, repeatedly), `inline_citation`
@@ -86,6 +134,7 @@ async def chat_stream(query: str = Form(...), document_ids: list[int] | None = F
     down before anything was shown, a backup model answers instead.
     """
     turns = parse_history(history)
+    document_ids, setup = await _answer_setup(user_id, chat_id, project_id, document_ids, scope_documents)
     try:
         logger.info(f"Received streaming query: '{query}'")
         # Retrieval errors happen before any bytes are sent, so they keep normal status codes.
@@ -103,7 +152,7 @@ async def chat_stream(query: str = Form(...), document_ids: list[int] | None = F
     async def events():
         yield _sse("meta", meta)
         try:
-            async for name, data in _answer_events(user_id, query, context, declarations, registry, turns):
+            async for name, data in _answer_events(user_id, query, context, declarations, registry, turns, setup):
                 yield _sse(name, data)
             yield _sse("done", {})
         except Exception as error:
@@ -123,8 +172,11 @@ async def _load_tools(user_id):
         return [], {}
 
 
-async def _answer_events(user_id, query, context, declarations, registry, turns):
+async def _answer_events(user_id, query, context, declarations, registry, turns, setup=None):
     """Stream prose and UI previews, then checked citations and the final UI spec."""
+    setup = setup or AnswerSetup()
+    extra = {**({"background": setup.background} if setup.background else {}),
+             **({"memory": setup.memory} if setup.memory else {})}
     draft, sources, evidence = [], {}, []
     ui = GenUIStream()
 
@@ -153,7 +205,7 @@ async def _answer_events(user_id, query, context, declarations, registry, turns)
     shown = False  # text or a non-web tool step the user has already seen
     try:
         async for name, data in answer_with_tools(user_id, query, context, declarations, registry,
-                                                  **({"history": turns} if turns else {})):
+                                                  **({"history": turns} if turns else {}), **extra):
             if name == "evidence":
                 evidence.extend(data["sources"])
                 continue
@@ -189,7 +241,9 @@ async def _answer_events(user_id, query, context, declarations, registry, turns)
         if declarations or shown or not gemini_unavailable(error) or not backup_configured():
             raise
         logger.warning("Gemini unavailable (%s); answering with a backup model", error)
-        async for kind, value in iterate_in_threadpool(stream_backup_answer(query, context, *([turns] if turns else []))):
+        backup = stream_backup_answer(query, context, *([turns] if turns else []),
+                                      **({"background": setup.background} if setup.background else {}))
+        async for kind, value in iterate_in_threadpool(backup):
             if kind == "model":
                 logger.info("Backup model %s is answering", value)
             elif kind == "evidence":
