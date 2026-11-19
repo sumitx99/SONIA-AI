@@ -182,11 +182,13 @@ _MEMORY_TITLES = {"search_past_chats": "past-chat search", "recent_chats": "rece
 
 
 async def answer_with_tools(user_id: str, query: str, context: str, declarations: list, registry: dict, history=None,
-                            background: str = "", memory=None):
+                            background: str = "", memory=None, fast: bool = False):
     """Yields (event, data) while answering; text arrives as "delta" events.
 
     `background` is the labelled project instructions and memory text for the prompt; `memory`
     (a MemoryTurn) offers the past-chat and memory tools when the user has memory on.
+    `fast` (voice mode) starts with the low-latency Groq models, which give a first word in well
+    under a second, and moves to Gemini only if they can't answer.
     """
     contents = conversation_turns(query, context, history, background)
     # Once untrusted text (documents, web pages, tool or past-chat results) is in the context, a
@@ -198,16 +200,30 @@ async def answer_with_tools(user_id: str, query: str, context: str, declarations
     attempted_pages = set()
     web = WebActivity()
     image_searches, image_count = 0, 0
-    backend = {"backup": False}
+    backend = {"backup": fast and backup_configured()}
     continuations = 0
 
     def iterate_model_parts(offered):
         # Sonia's own tools (not from a connection) stay on offer when the backup shortlists.
         app_tools = [tool["name"] for tool in offered if tool not in declarations]
         if backend["backup"]:
-            yield from stream_tool_backup(contents, offered, allow_web=not contents.final_answer_only,
-                                         app_tools=app_tools)
-            return
+            if not fast:
+                yield from stream_tool_backup(contents, offered, allow_web=not contents.final_answer_only,
+                                             app_tools=app_tools)
+                return
+            started = False
+            try:
+                for part in stream_tool_backup(contents, offered, allow_web=not contents.final_answer_only,
+                                               app_tools=app_tools):
+                    started = True
+                    yield part
+                return
+            except Exception:
+                # Nothing was said yet: let Gemini answer instead of failing the turn.
+                if started:
+                    raise
+                logger.warning("Fast backup unavailable for a voice turn; answering with Gemini")
+                backend["backup"] = False
         generated = False
         try:
             for part in stream_gemini_parts(contents, offered):

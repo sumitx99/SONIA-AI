@@ -31,11 +31,39 @@ router = APIRouter()
 class AnswerSetup:
     """The chat's project and memory, as they apply to one answer."""
 
-    def __init__(self, background: str = "", memory: MemoryTurn | None = None):
-        self.background, self.memory = background, memory
+    def __init__(self, background: str = "", memory: MemoryTurn | None = None, voice: str | None = None):
+        self.background, self.memory, self.voice = background, memory, voice
 
 
-async def _answer_setup(user_id, chat_id, project_id, document_ids, scope_documents):
+VOICE_INSTRUCTION = (
+    "Live voice call: the user is talking to you out loud and hears your reply spoken. Sound like a warm, "
+    "friendly person on a call, not a textbook or a translation: short natural sentences, contractions, a "
+    "brief reaction to what they said when it fits, one idea at a time, and a short follow-up question when "
+    "it helps the conversation. Usually one to three sentences. No lists, tables, headings, code or URLs "
+    "unless they ask. Reply in the same language and mix the user spoke (English, Hindi or Hinglish). "
+    "For facts from documents or the web, keep the required citations; the chat shows them.")
+# The assistant's name in a voice call follows the chosen voice.
+VOICE_NAMES = {"male": "Bheem", "female": "Sonia"}
+
+
+def _voice_choice(value: str | None) -> str | None:
+    """The voice of a spoken turn. Older app versions sent voice=true; they get the default voice,
+    so a frontend and backend deployed a few minutes apart never reject each other's requests."""
+    if not value or value.strip().lower() in ("false", "0", ""):
+        return None
+    value = value.strip().lower()
+    return value if value in VOICE_NAMES else "female"
+
+
+def _voice_instruction(voice: str | None) -> str:
+    if not voice:
+        return ""
+    name = VOICE_NAMES.get(voice, "Sonia")
+    return VOICE_INSTRUCTION + f" In this call your name is {name}; introduce yourself as {name} when asked."
+
+
+async def _answer_setup(user_id, chat_id, project_id, document_ids, scope_documents, voice=None):
+    voice = _voice_choice(voice)
     """Adds the project's files to the searched documents, and its instructions and memory to the prompt.
 
     Memory problems never block an answer: it is then given without memory.
@@ -46,8 +74,8 @@ async def _answer_setup(user_id, chat_id, project_id, document_ids, scope_docume
         project = await chat_project(user_id, chat_id, project_id)
     except Exception:
         logger.exception("Could not load the chat's project")
-        return document_ids, AnswerSetup()
-    background = []
+        return document_ids, AnswerSetup(_voice_instruction(voice), voice=voice)
+    background = [_voice_instruction(voice)] if voice else []
     if project:
         if scope_documents:
             document_ids = list(document_ids or []) + await project_document_ids(user_id, project["id"])
@@ -66,16 +94,17 @@ async def _answer_setup(user_id, chat_id, project_id, document_ids, scope_docume
             schedule_summary(user_id, scope)
     except Exception:
         logger.exception("Memory is unavailable for this answer")
-    return document_ids, AnswerSetup("\n\n".join(background), memory)
+    return document_ids, AnswerSetup("\n\n".join(background), memory, voice)
 
 
 @router.post("/chat", tags=["Chat"])
 async def chat(query: str = Form(...), document_ids: list[int] | None = Form(None),
                scope_documents: bool = Form(False), include_images: bool = Form(False),
                user_id: str = Depends(current_user), history: str | None = Form(None),
-               chat_id: str | None = Form(None), project_id: str | None = Form(None)):
+               chat_id: str | None = Form(None), project_id: str | None = Form(None),
+               voice: str | None = Form(None)):
     turns = parse_history(history)
-    document_ids, setup = await _answer_setup(user_id, chat_id, project_id, document_ids, scope_documents)
+    document_ids, setup = await _answer_setup(user_id, chat_id, project_id, document_ids, scope_documents, voice)
     try:
         logger.info(f"Received query: '{query}'")
         context, meta = await answer_context(query, document_ids, scope_documents, include_images, user_id)
@@ -121,7 +150,8 @@ def _sse(event: str, data: dict) -> str:
 async def chat_stream(query: str = Form(...), document_ids: list[int] | None = Form(None),
                       scope_documents: bool = Form(False), include_images: bool = Form(False),
                       user_id: str = Depends(current_user), history: str | None = Form(None),
-                      chat_id: str | None = Form(None), project_id: str | None = Form(None)):
+                      chat_id: str | None = Form(None), project_id: str | None = Form(None),
+                      voice: str | None = Form(None)):
     """Like /chat, but streams the answer as server-sent events while Gemini writes it.
 
     Events: `meta` (images and status, once), `delta` ({"text"}, repeatedly), `inline_citation`
@@ -134,7 +164,7 @@ async def chat_stream(query: str = Form(...), document_ids: list[int] | None = F
     down before anything was shown, a backup model answers instead.
     """
     turns = parse_history(history)
-    document_ids, setup = await _answer_setup(user_id, chat_id, project_id, document_ids, scope_documents)
+    document_ids, setup = await _answer_setup(user_id, chat_id, project_id, document_ids, scope_documents, voice)
     try:
         logger.info(f"Received streaming query: '{query}'")
         # Retrieval errors happen before any bytes are sent, so they keep normal status codes.
@@ -176,7 +206,9 @@ async def _answer_events(user_id, query, context, declarations, registry, turns,
     """Stream prose and UI previews, then checked citations and the final UI spec."""
     setup = setup or AnswerSetup()
     extra = {**({"background": setup.background} if setup.background else {}),
-             **({"memory": setup.memory} if setup.memory else {})}
+             **({"memory": setup.memory} if setup.memory else {}),
+             # Voice replies favour a fast first word over everything else.
+             **({"fast": True} if setup.voice else {})}
     draft, sources, evidence = [], {}, []
     ui = GenUIStream()
 

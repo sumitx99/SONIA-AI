@@ -14,6 +14,7 @@ import deleteStyles from "@/components/chat/delete-confirmation.module.css";
 import { AnimatePresence, motion, MotionConfig } from "motion/react";
 import {
   ArrowUp,
+  AudioLines,
   ArrowUpRight,
   Check,
   ChevronDown,
@@ -36,6 +37,8 @@ import { Brand, Emblem } from "@/components/brand";
 import { AccountMenu } from "@/components/account/account-menu";
 import { ProjectDialog } from "@/components/chat/project-dialog";
 import { ProjectView } from "@/components/chat/project-view";
+import { VoiceMode } from "@/components/chat/voice-mode";
+import voiceStyles from "@/components/chat/voice-mode.module.css";
 import projectStyles from "@/components/chat/projects.module.css";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { DocumentImageGallery } from "@/components/chat/document-image";
@@ -48,7 +51,7 @@ import { MarkdownMessage } from "@/components/chat/markdown-message";
 import { ToolCalls, WebSources } from "@/components/chat/tool-calls";
 import { streamMessage, uploadPDF, waitForDocumentImages, deleteConversation, handleApiError, listProjects,
   moveConversation, type ImageAttachment, type ChatMessage as Message, type ChatSession, type InlineGroundingCitation,
-  type Project, type ToolCall } from "@/lib/api";
+  type Project, type ToolCall, type VoiceChoice } from "@/lib/api";
 import { applyInlineGroundingCitations } from "@/lib/markdown/inline-grounding";
 import { isImageUrl } from "@/lib/markdown/image-url";
 import { conversationHistory, editConversation } from "@/lib/chat-context";
@@ -99,6 +102,7 @@ export default function SoniaChatInterface() {
     try { localStorage.setItem("sonia-projects-open", String(next)); } catch { /* Keep the toggle usable without storage. */ }
   }
   const [moveError, setMoveError] = useState("");
+  const [voiceOpen, setVoiceOpen] = useState(false);
   const [input, setInput] = useState("");
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editedPrompt, setEditedPrompt] = useState("");
@@ -222,14 +226,18 @@ export default function SoniaChatInterface() {
     );
   }
 
-  async function ask(replacement?: { messageId: string; content: string }, resume = false) {
+  /** Sends a question. `spoken` is a voice-mode turn: its own text, and a listener for the answer text.
+   *  Resolves true once an answer finished. */
+  async function ask(replacement?: { messageId: string; content: string }, resume = false,
+    spoken?: { query: string; voice: VoiceChoice; onText: (raw: string) => void }): Promise<boolean> {
     const continuation = resume && stopped?.id === currentId ? stopped : null;
-    if (resume && !continuation) return;
+    if (resume && !continuation) return false;
     const query = (continuation ? continuation.hasText
       ? "Continue the interrupted answer from where it stopped. Do not repeat the existing answer or any completed tool actions. Cite sources for additional factual claims."
-      : continuation.query : replacement?.content ?? input).trim();
-    if (!query || busy.current) return;
-    if (replacement && !messages.some(m => m.id === replacement.messageId && m.sender === "user")) return;
+      : continuation.query : spoken?.query ?? replacement?.content ?? input).trim();
+    if (!query || busy.current) return false;
+    if (replacement && !messages.some(m => m.id === replacement.messageId && m.sender === "user")) return false;
+    let answered = false;
     busy.current = true;
     const controller = new AbortController();
     answerController.current = controller;
@@ -257,7 +265,7 @@ export default function SoniaChatInterface() {
             : session,
         ),
       );
-    if (!continuation) setInput("");
+    if (!continuation && !spoken) setInput("");
     setPending({ id, kind: "answer" });
     const answerId = crypto.randomUUID();
     let meta: { images?: ImageAttachment[]; image_notice?: string | null } = {};
@@ -284,6 +292,7 @@ export default function SoniaChatInterface() {
         onDelta: (piece) => {
           start();
           rawText += piece;
+          spoken?.onText(rawText);
           text = applyInlineGroundingCitations(rawText, inlineCitations);
           update({ content: text });
         },
@@ -328,13 +337,14 @@ export default function SoniaChatInterface() {
           text = applyInlineGroundingCitations(rawText, inlineCitations);
           update({ content: text, citations });
         },
-      }, conversationHistory(before), controller.signal, { chatId: id, projectId });
+      }, conversationHistory(before), controller.signal, { chatId: id, projectId, voice: spoken?.voice });
       controller.signal.throwIfAborted();
       toolCalls = toolCalls.map(call => call.status === "running" ? { ...call, status: cutOff ? "error" as const : "done" as const } : call);
       update({
         streaming: false, tool_calls: toolCalls,
         ...(cutOff && { ui_spec: null, notice: "The answer was cut off part-way. Ask again to get the rest." }),
       });
+      answered = !cutOff;
     } catch (error) {
       if (controller.signal.aborted) {
         setStopped({ id, query: continuation?.query ?? query, hasText: !!text || !!continuation?.hasText });
@@ -360,7 +370,37 @@ export default function SoniaChatInterface() {
       setGeneratingId(null);
       setPending(null);
     }
+    return answered;
   }
+  // Voice mode runs across renders, so it always calls the latest ask (current chat, history…).
+  const askRef = useRef(ask);
+  askRef.current = ask;
+
+  /** Keeps a realtime voice exchange in the chat (its text comes from the model's transcripts). */
+  function recordVoiceTurn(user: string, sonia: string) {
+    const id = currentId ?? createChat();
+    const first = !messages.length;
+    const added: Message[] = [
+      ...(user ? [{ id: crypto.randomUUID(), content: user, sender: "user" as const }] : []),
+      ...(sonia ? [{ id: crypto.randomUUID(), content: sonia, sender: "bot" as const,
+        notice: "Voice reply. Sources aren’t checked for realtime voice answers." }] : []),
+    ];
+    setSessions(previous => previous.map(chat => chat.id === id ? {
+      ...chat,
+      title: first && user ? (user.length > 36 ? `${user.slice(0, 36)}…` : user) : chat.title,
+      messages: [...chat.messages, ...added],
+    } : chat));
+  }
+  const voiceTurnRef = useRef(recordVoiceTurn);
+  voiceTurnRef.current = recordVoiceTurn;
+  const liveDetails = () => ({
+    chat_id: currentId,
+    project_id: current ? current.projectId ?? null : viewedProject?.id ?? null,
+    document_ids: current?.documentIds ?? [],
+    history: conversationHistory(messages),
+  });
+  const liveDetailsRef = useRef(liveDetails);
+  liveDetailsRef.current = liveDetails;
 
   async function upload(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -679,7 +719,13 @@ export default function SoniaChatInterface() {
               onSignOut={signOut} onPreferences={setPreferences} />
           </div>
         </aside>
-        <main className="chat-main">
+        <main className={`chat-main ${voiceStyles.host}`}>
+          {voiceOpen && <VoiceMode
+            context={current?.title ?? viewedProject?.name}
+            onAsk={(query, voice, onText) => askRef.current(undefined, false, { query, voice, onText })}
+            onStop={() => answerController.current?.abort()}
+            live={{ details: () => liveDetailsRef.current(), onTurn: (user, sonia) => voiceTurnRef.current(user, sonia) }}
+            onClose={() => { answerController.current?.abort(); setVoiceOpen(false); promptEditor.current?.focus(); }} />}
           <header className="chat-header">
             <div>
               <button
@@ -856,6 +902,10 @@ export default function SoniaChatInterface() {
                   <span>Add a PDF</span>
                 </button>
                 <span className="composer-hint mono">{answeringHere ? "ANSWERING…" : pending?.kind === "upload" ? "UPLOADING PDF…" : canResume ? "RESUME ANSWER" : "ENTER TO SEND"}</span>
+                <button type="button" className={voiceStyles.launch} aria-label="Talk with Sonia" title="Voice mode"
+                  disabled={!!pending || !!generatingId} onClick={() => setVoiceOpen(true)}>
+                  <AudioLines size={17} aria-hidden="true" />
+                </button>
                 <button
                   key={composerAction}
                   className="send-button"

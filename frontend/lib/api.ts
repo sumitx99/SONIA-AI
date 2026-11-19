@@ -325,11 +325,12 @@ export const uploadPDF = async (file: File, chatId?: string, onStatus?: (status:
 };
 
 /** Which chat an answer is for: the backend adds its project's files, instructions and memory. */
-export interface AnswerTarget { chatId?: string; projectId?: string | null }
+export interface AnswerTarget { chatId?: string; projectId?: string | null; /** A spoken voice-mode turn, with the chosen voice. */ voice?: VoiceChoice }
 
 function appendTarget(formData: FormData, target?: AnswerTarget) {
   if (target?.chatId) formData.append("chat_id", target.chatId);
   if (target?.projectId) formData.append("project_id", target.projectId);
+  if (target?.voice) formData.append("voice", target.voice);
 }
 
 // Send chat message to backend
@@ -615,6 +616,34 @@ export async function refreshMemory(projectId?: string): Promise<MemoryOverview>
 }
 export async function resetMemory(projectId?: string): Promise<MemoryOverview> {
   return json(await apiFetch(memoryPath("", projectId), { method: "DELETE" }));
+}
+
+// --- Voice mode: server speech-to-text, for browsers without their own recognition ---
+
+export type VoiceChoice = "male" | "female";
+
+export async function voiceStatus(): Promise<{ transcription: boolean }> {
+  return json(await apiFetch("/voice/status", { cache: "no-store" }));
+}
+export async function transcribeAudio(audio: Blob, signal?: AbortSignal): Promise<string> {
+  const body = new FormData();
+  const extension = audio.type.includes("mp4") ? "m4a" : audio.type.includes("ogg") ? "ogg" : "webm";
+  body.append("file", audio, `speech.${extension}`);
+  return (await json<{ text: string }>(await apiFetch("/voice/transcribe", { method: "POST", body, signal }))).text;
+}
+
+export interface LiveVoiceSession { session_id: string; token: string; url: string; model: string }
+export interface LiveVoiceStart {
+  voice: VoiceChoice; chat_id?: string | null; project_id?: string | null; document_ids: number[];
+  history: { sender: "user" | "bot"; content: string }[];
+}
+/** A short-lived token for one realtime (Gemini Live) voice session; Sonia's setup is locked into it. */
+export async function startLiveVoice(details: LiveVoiceStart, signal?: AbortSignal): Promise<LiveVoiceSession> {
+  return json(await apiFetch("/voice/live", { ...jsonBody("POST", details), signal }));
+}
+export async function runLiveVoiceTool(sessionId: string, name: string, args: unknown, signal?: AbortSignal): Promise<string> {
+  return (await json<{ result: string }>(await apiFetch("/voice/live/tool",
+    { ...jsonBody("POST", { session_id: sessionId, name, args }), signal }))).result;
 }
 
 // Approve or decline a tool call an answer is waiting on.
