@@ -72,8 +72,9 @@ async def answer_context(query, document_ids, scope_documents, include_images, u
             "If no image was found, say so rather than claiming to display one."
         )
 
-    if not context:
+    # Only report retrieval when documents were actually searched (a chat without PDFs skips it).
+    if scope and not context:
         logger.warning("No relevant context found after re-ranking for the query.")
-    else:
+    elif scope:
         logger.info("Retrieved and re-ranked context successfully.")
     return context, {"images": images, "image_status": image_status, "image_notice": image_notice}
