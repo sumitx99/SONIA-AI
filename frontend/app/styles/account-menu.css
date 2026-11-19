@@ -24,15 +24,16 @@
 .account-popover .account-logout[data-highlighted] > svg { color:#e1a49c; }
 @keyframes account-menu-enter { from { opacity:0; transform:translateY(4px) scale(.98); } to { opacity:1; transform:none; } }
 @media(prefers-reduced-motion:reduce) { .account-popover { animation:none; } .account-popover [role="menuitem"],.account-menu-trigger { transition:none; } }
-.account-settings-dialog { width:calc(100vw - 32px); max-width:750px !important; max-height:calc(100dvh - 40px); overflow-y:auto; padding:27px !important; border:1px solid #dededb !important; border-radius:18px !important; background:#fafaf7 !important; color:#242424 !important; font-family:var(--font-geist-sans),sans-serif; box-shadow:0 35px 100px #0005; gap:5px !important; }
+/* One size for every section: the header and nav stay put, and only the section's content scrolls. */
+.account-settings-dialog { width:calc(100vw - 32px); max-width:750px !important; height:min(720px, calc(100dvh - 40px)); display:flex !important; flex-direction:column; overflow:hidden; padding:27px !important; border:1px solid #dededb !important; border-radius:18px !important; background:#fafaf7 !important; color:#242424 !important; font-family:var(--font-geist-sans),sans-serif; box-shadow:0 35px 100px #0005; gap:5px !important; }
 .account-settings-dialog > h2 { font-size:23px; font-weight:550; letter-spacing:-.04em; }
 .account-settings-description { color:#888 !important; font-size:12px !important; margin-top:3px; }
-.account-settings-layout { display:grid; grid-template-columns:155px minmax(0,1fr); gap:28px; margin-top:25px; }
-.account-settings-layout > nav { display:flex; flex-direction:column; gap:5px; border-right:1px solid #e3e3df; padding-right:15px; }
+.account-settings-layout { display:grid; grid-template-columns:155px minmax(0,1fr); grid-template-rows:minmax(0,1fr); flex:1; min-height:0; gap:28px; margin-top:25px; }
+.account-settings-layout > nav { display:flex; flex-direction:column; gap:5px; border-right:1px solid #e3e3df; padding-right:15px; overflow-y:auto; }
 .account-settings-layout > nav button { display:flex; align-items:center; gap:9px; padding:11px 9px; border-radius:7px; text-align:left; font-size:11px; color:#777; cursor:pointer; }
 .account-settings-layout > nav button[aria-current="page"] { background:#ededeb; color:#252525; }
 .account-settings-layout > nav button:hover { background:#f0f0ed; }
-.account-settings-content { min-width:0; min-height:320px; }
+.account-settings-content { min-width:0; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding-right:6px; }
 .account-avatar-large { width:78px; height:78px; font-size:25px; }
 .account-photo-editor { display:flex; align-items:center; gap:20px; margin-bottom:26px; }
 .account-photo-editor > div { display:flex; flex-wrap:wrap; align-items:center; gap:8px 13px; }
@@ -73,8 +74,8 @@
 .chat-app[data-reduce-motion="true"] *,.chat-app[data-reduce-motion="true"] *::before,.chat-app[data-reduce-motion="true"] *::after { animation:none !important; transition:none !important; scroll-behavior:auto !important; }
 @media(max-width:600px) {
  .account-settings-dialog { padding:22px !important; }
- .account-settings-layout { grid-template-columns:1fr; gap:22px; margin-top:17px; }
- .account-settings-layout > nav { flex-direction:row; flex-wrap:wrap; border:0; border-bottom:1px solid #ddd; padding:0 0 12px; gap:3px; }
+ .account-settings-layout { grid-template-columns:1fr; grid-template-rows:auto minmax(0,1fr); gap:22px; margin-top:17px; }
+ .account-settings-layout > nav { flex-direction:row; flex-wrap:wrap; border:0; border-bottom:1px solid #ddd; padding:0 0 12px; gap:3px; overflow:visible; }
  .account-settings-layout > nav button { padding:9px 7px; font-size:10px; gap:5px; }
  .account-settings-layout > nav button svg { width:13px; height:13px; }
  .account-photo-editor { gap:15px; }
